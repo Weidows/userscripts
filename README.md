@@ -26,8 +26,11 @@
 - 机制：魔搭魔粒无独立领取接口，访问页面即由后端发放；脚本用带 Cookie 的 `GM_xmlhttpRequest` 模拟访问 + 余额接口校验
 - 通知：`GM_notification` 弹「签到成功 / 失败」；运行日志见 ScriptCat 脚本列表「运行状态」列
 
-[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-安装-9cf.svg)](https://scriptcat.org/#/add?url=https://raw.githubusercontent.com/Weidows/userscripts/main/modelscope-magicube-checkin.user.js)
+[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/modelscope-magicube-checkin.user.js)
 [![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](modelscope-magicube-checkin.user.js)
+
+> 已安装 ScriptCat / Tampermonkey 后，**点击上方「一键安装」徽章**即直接弹出安装框；
+> 也可在 ScriptCat 中「新建脚本 → 从 URL 安装」粘贴 raw 链接。
 
 #### 自定义执行时间
 
