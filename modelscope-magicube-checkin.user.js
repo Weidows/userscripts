@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ModelScope 魔粒每日自动签到
 // @namespace    https://modelscope.cn/magicube
-// @version      1.0.0
-// @description  ScriptCat 后台定时任务：每天自动访问 https://modelscope.cn/magicube/usage?tab=consume 触发签到领取魔粒，无需手动打开页面
+// @version      1.1.0
+// @description  ScriptCat 后台定时任务：每天自动访问 https://modelscope.cn/magicube/usage?tab=consume 触发签到领取魔粒。登录过期会检测并弹出可点击的登录提示。
 // @author       weidows
 // @crontab      * * once * *
 // @grant        GM_xmlhttpRequest
@@ -22,10 +22,18 @@
  *   想每天 9-18 点之间只跑一次可改为：// @crontab * 9-18 once * *
  * - 必须 return Promise，resolve=成功，reject=失败；失败时抛 CATRetryError 可自动重试
  * - 后台脚本跑在沙盒里无法操作 DOM，全部用 GM_xmlhttpRequest 带 Cookie 请求
+ *
+ * 登录过期检测（多路判定，任一命中即视为未登录）：
+ *   1) 页面请求返回 401 / 403
+ *   2) 页面 HTML 含「登录 / 注册」且不含魔粒数据（未登录态）
+ *   3) 余额接口返回 JSON 的 code == "InvalidAuthentication"（最硬信号，Cookie 失效）
+ *   4) 余额接口返回 401 / 403
+ * 命中后：弹「可点击打开登录页」的通知，并直接 reject（不重试，因为重试也没用，必须你重新登录）
  */
 
 return new Promise((resolve, reject) => {
   const URL_PAGE = "https://modelscope.cn/magicube/usage?tab=consume";
+  const URL_LOGIN = "https://modelscope.cn/my/account?from=magicube";
   const URL_BALANCE = "https://modelscope.cn/openapi/v1/magicubes/balance";
   const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -35,15 +43,34 @@ return new Promise((resolve, reject) => {
     console.log("[MagicCube]", ...args);
   }
 
-  function notify(title, text) {
-    try { GM_notification({ title, text }); } catch (_) {}
+  // 统一：登录过期处理。onLoginExpired=true 时直接 reject（不重试），并弹可点击通知
+  function handleLoginExpired(reason) {
+    const msg = `登录已过期/未登录：${reason}。请点击通知登录 modelscope.cn 后，次日自动重试（或手动运行一次）。`;
+    log(msg);
+    try {
+      GM_notification({
+        title: "魔粒签到失败 · 需要重新登录",
+        text: msg + "\n\n[点击此通知打开登录页]",
+        onclick: function () {
+          try { window.open(URL_LOGIN, "_blank"); } catch (_) {}
+        },
+        timeout: 0,
+      });
+    } catch (_) {
+      // 某些环境 GM_notification 不支持 onclick，退化为普通通知
+      try { GM_notification({ title: "魔粒签到失败 · 需要重新登录", text: msg + " 登录页：" + URL_LOGIN }); } catch (__) {}
+    }
+    // 登录失效必须人工介入，重试无意义；直接 reject（once 已保证当天不会重复跑）
+    reject(msg);
   }
 
-  // 防止当天已成功又被重试/重跑：用 GM 存储做幂等
-  const lastDate = GM_getValue("last_success_date", "");
-  const lastBalance = GM_getValue("last_balance", "");
+  function notifySuccess(text) {
+    try {
+      GM_notification({ title: "魔粒签到成功", text: text, timeout: 8000 });
+    } catch (_) {}
+  }
 
-  log(`开始签到任务 today=${TODAY} last_success=${lastDate} last_balance=${lastBalance}`);
+  log(`开始签到任务 today=${TODAY} last_success=${GM_getValue("last_success_date", "")}`);
 
   // 1) 先访问页面：你说的“访问一下这个地址就能签到”就是靠这个请求触发
   GM_xmlhttpRequest({
@@ -59,26 +86,20 @@ return new Promise((resolve, reject) => {
       log(`GET ${URL_PAGE} status=${res.status} len=${(res.responseText || "").length}`);
 
       if (res.status === 401 || res.status === 403) {
-        const msg = "未登录或 Cookie 失效，请手动打开页面登录一次";
-        log(msg);
-        notify("魔粒签到失败", msg);
-        reject(msg);
+        handleLoginExpired(`访问页面返回 ${res.status}`);
         return;
       }
 
       const html = res.responseText || "";
       // 未登录时页面会包含 登录/注册 字样且无魔粒数据
       if (html.includes("登录 / 注册") && !html.includes("我的魔粒") && !html.includes("magicCube")) {
-        const msg = "检测到未登录状态，请先在浏览器中登录 modelscope.cn";
-        log(msg);
-        notify("魔粒签到失败", msg);
-        reject(msg);
+        handleLoginExpired("页面显示未登录态");
         return;
       }
 
-      log("页面访问成功，尝试查询余额确认是否已领取（可选）...");
+      log("页面访问成功，尝试查询余额确认是否已领取（并兜底检测登录态）...");
 
-      // 2) 再查一次余额接口做确认/日志（失败不影响主流程判定）
+      // 2) 再查一次余额接口做确认/日志（同时用 InvalidAuthentication 兜底检测 Cookie 是否真的有效）
       GM_xmlhttpRequest({
         url: URL_BALANCE,
         method: "GET",
@@ -86,27 +107,39 @@ return new Promise((resolve, reject) => {
         anonymous: false,
         onload(r2) {
           log(`GET balance status=${r2.status} body=${(r2.responseText || "").slice(0, 800)}`);
+
+          // 兜底检测登录过期：最硬信号
+          if (r2.status === 401 || r2.status === 403) {
+            handleLoginExpired(`余额接口返回 ${r2.status}`);
+            return;
+          }
+          let json = null;
+          try { json = JSON.parse(r2.responseText); } catch (_) {}
+          if (json && (json.code === "InvalidAuthentication" || /authentication required/i.test(json.message || ""))) {
+            handleLoginExpired("余额接口返回 InvalidAuthentication（Cookie 已失效）");
+            return;
+          }
+
           let balanceText = "";
-          try {
-            const j = JSON.parse(r2.responseText);
-            const d = j.data || j;
+          if (json) {
+            const d = json.data || json;
             const bal = d.available_balance ?? d.balance ?? d.total ?? "";
             if (bal !== "") balanceText = `当前可用魔粒: ${bal}`;
-          } catch (_) {}
+          }
 
           GM_setValue("last_success_date", TODAY);
           if (balanceText) GM_setValue("last_balance", balanceText);
 
           const okMsg = balanceText ? `签到完成，${balanceText}` : "签到完成（页面访问成功）";
           log(okMsg);
-          notify("魔粒签到成功", okMsg);
+          notifySuccess(okMsg);
           resolve(okMsg);
         },
         onerror() {
           // 余额接口失败不算签到失败，页面访问本身已触发签到
           log("余额接口请求失败，但页面访问已完成，视为签到成功");
           GM_setValue("last_success_date", TODAY);
-          notify("魔粒签到成功", "页面访问成功（余额查询跳过）");
+          notifySuccess("页面访问成功（余额查询跳过）");
           resolve("ok - page visited, balance check skipped");
         },
         ontimeout() {
@@ -119,7 +152,7 @@ return new Promise((resolve, reject) => {
     onerror(err) {
       const msg = `页面请求失败 status=${err && err.status} error=${err && err.error}`;
       log(msg);
-      // 用 CATRetryError 触发 ScriptCat 的重试（最小 5s，这里 60s 后重试）
+      // 网络错误才值得重试（CATRetryError），登录类错误已在上面拦截
       try {
         reject(new CATRetryError(msg, 60));
       } catch (_) {
