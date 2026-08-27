@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Epic 每周免费游戏加购物车
 // @namespace    https://store.epicgames.com/
-// @version      2.0.1
+// @version      2.0.2
 // @description  ScriptCat 后台定时任务：每周把 Epic 的免费游戏加入购物车（避免下单时的验证码），然后给你购物车链接，你点链接手动结算即可。未登录会弹可点击登录提示，并每日重复提醒直到你处理。
 // @author       weidows
 // 调度：默认每天跑一次（* * once * *），因为「加购物车」是幂等的，每天跑既能补加新游戏、又能每天重复提醒你（你常离开电脑注意不到弹窗）。
@@ -12,6 +12,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_log
 // @grant        GM_notification
+// @grant        GM_openInTab
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      store-site-backend-static-ipv4.ak.epicgames.com
@@ -116,6 +117,13 @@ return new Promise((resolve, reject) => {
     return r.isHtml || r.status === 403 || r.timeout || r.error;
   }
 
+  // 打开标签页：后台脚本里 window.open 会触发 ERR_BLOCKED_BY_RESPONSE，
+  // 必须用 GM_openInTab（在真实页面上下文打开）。
+  function openTab(url) {
+    try { if (typeof GM_openInTab === "function") { GM_openInTab(url, { active: true, insert: true }); return; } } catch (_) {}
+    try { window.open(url, "_blank"); } catch (__) {}
+  }
+
   // —— 通知 ——
   function notifyCartReady(pending) {
     const titles = pending.offers.map((o) => o.title).join("、");
@@ -125,7 +133,7 @@ return new Promise((resolve, reject) => {
         title: "Epic 免费游戏已在购物车 · 去结算",
         text,
         timeout: 0,
-        onclick() { try { window.open(CART_URL, "_blank"); } catch (_) {} },
+        onclick() { openTab(CART_URL); },
       });
     } catch (_) {
       try { GM_notification({ title: "Epic 免费游戏已在购物车", text: text }); } catch (__) {}
@@ -139,7 +147,7 @@ return new Promise((resolve, reject) => {
         title: "Epic 免费游戏加购物车失败 · 需要登录",
         text,
         timeout: 0,
-        onclick() { try { window.open(URL_LOGIN, "_blank"); } catch (_) {} },
+        onclick() { openTab(URL_LOGIN); },
       });
     } catch (_) {
       try { GM_notification({ title: "Epic 免费游戏加购物车失败 · 需要登录", text }); } catch (__) {}
