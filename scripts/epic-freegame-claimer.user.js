@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Epic 每周免费游戏自动领取
 // @namespace    https://store.epicgames.com/
-// @version      1.0.1
+// @version      1.0.2
 // @description  ScriptCat 后台定时任务：每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单）。未登录/登录过期会检测并弹出可点击的登录提示。
 // @author       weidows
 // 调度：每周四首次匹配时跑一次（北京时间≈周四凌晨，避开周三晚新游上架前）；当天幂等防重跑。
@@ -30,16 +30,16 @@
  *
  * 领取流程（照搬 Epic 网页下单逻辑，已对照 epicgames-freegames-node 的真实请求体）：
  *   1) freeGamesPromotions  —— 拉取当前/即将免费的游戏（公开接口，无需登录）
- *   2) account/v2/refresh-csrf —— 取得 XSRF token，并借此判断登录态
- *       登录时返回 JSON {token:"..."}；未登录时返回 HTML 登录页。
+ *   2) id/api/csrf          —— 刷新 XSRF-TOKEN（返回 204，Set-Cookie 下发；注意：
+ *      绝对不能用 account/v2/refresh-csrf 当登录信号，因为它"已登录也返回 HTML 登录页"，
+ *      会误判成未登录！）。登录态的真正确认放在第 3 步的 order-preview。
  *   3) 仅对"当前免费（promotionalOffers 进行中 + discountPrice==0 + 非兑换码）且本周未领过"的游戏：
  *        POST order-preview  → 取 syncToken / orderId / namespace / country
  *        POST confirm-order  → 完成免费下单
  *
- * 未登录检测（多路，任一命中即视为未登录）：
- *   - refresh-csrf 返回的不是 JSON（被跳到登录页）
- *   - order-preview / confirm-order 返回 HTML（被重定向到登录页）
- *   - confirm-order 的 body 含 "auth" / "login" / "signIn" 关键字或 errorCode 含 AUTHENTICATION
+ * 未登录检测（以 order-preview 为唯一权威信号，不再用 refresh-csrf）：
+ *   - order-preview 返回 401 / 403 / HTML（被重定向到登录页）才视为未登录
+ *   - confirm-order 返回 401 / 403 / HTML 同样视为未登录
  * 命中后：弹「可点击打开登录页」的通知，并直接 reject（重试无意义，必须你重新登录）。
  *
  * 已知边界（务必看）：
@@ -56,7 +56,7 @@ return new Promise((resolve, reject) => {
 
   // 端点（与 epicgames-freegames-node 保持一致）
   const URL_FREE = `https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=${LOCALE}&country=${COUNTRY}&allowCountries=${COUNTRY}`;
-  const URL_CSRF = "https://www.epicgames.com/account/v2/refresh-csrf";
+  const URL_CSRF = "https://www.epicgames.com/id/api/csrf";
   const URL_PREVIEW = "https://payment-website-pci.ol.epicgames.com/purchase/order-preview";
   const URL_CONFIRM = "https://payment-website-pci.ol.epicgames.com/purchase/confirm-order";
   const URL_LOGIN = "https://store.epicgames.com/";
@@ -90,15 +90,6 @@ return new Promise((resolve, reject) => {
 
   function notifyInfo(title, text) {
     try { GM_notification({ title, text, timeout: 10000 }); } catch (_) {}
-  }
-
-  // 在 URL 上挂 XSRF token（Epic 的 payment 站点同时认 header 与 query 参数）
-  function withXsrf(url, token) {
-    try {
-      const u = new URL(url);
-      u.searchParams.set("xsrfToken", token);
-      return u.toString();
-    } catch (_) { return url + (url.includes("?") ? "&" : "?") + "xsrfToken=" + encodeURIComponent(token); }
   }
 
   // 解析 freeGamesPromotions，返回"当前免费"列表
@@ -152,22 +143,18 @@ return new Promise((resolve, reject) => {
       }
       log("发现可领取免费游戏:", free.map((g) => g.title).join(", "));
 
-      // 2) 取 CSRF 并判定登录态
+      // 2) 刷新 XSRF-TOKEN（id/api/csrf 返回 204，Set-Cookie 下发 XSRF-TOKEN + EPIC_SESSION_AP）
+      //    注意：不在此处判断登录态！account/v2/refresh-csrf 已登录也返回 HTML，会误判。
+      //    真正的登录判断放在 claimOne 的 order-preview（401/403/HTML 才视为未登录）。
       GM_xmlhttpRequest({
         url: URL_CSRF,
         method: "GET",
-        headers: { "Accept": "application/json" },
+        headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
         anonymous: false,
         timeout: TIMEOUT_MS,
         onload(r2) {
-          const body = (r2.responseText || "").trim();
-          const csrfJson = safeJSON(body);
-          // 已登录：返回 { token: "..." }；未登录：返回 HTML 登录页
-          if (!csrfJson || typeof csrfJson.token !== "string") {
-            return notifyLoginNeeded("refresh-csrf 未返回 token（被重定向到登录页）");
-          }
-          const xsrf = csrfJson.token;
-          log("已登录，取得 XSRF token 长度", String(xsrf).length);
+          // 204 即可，XSRF 已由 Set-Cookie 写入浏览器 Cookie，后续请求自动带上
+          log("CSRF 刷新完成 status=", r2.status, "（XSRF 由浏览器 Cookie 携带）");
 
           // 本周已成功领取过的 offerId 集合（去重，避免重复下单）
           let claimed = {};
@@ -212,13 +199,12 @@ return new Promise((resolve, reject) => {
           claimNext();
         },
         onerror(err) {
-          // 网络类错误才重试（CATRetryError），登录类错误已在上面拦截
-          const msg = `refresh-csrf 请求失败 status=${err && err.status}`;
+          const msg = `CSRF 刷新请求失败 status=${err && err.status}`;
           log(msg);
           try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
         },
         ontimeout() {
-          const msg = "refresh-csrf 请求超时";
+          const msg = "CSRF 刷新请求超时";
           log(msg);
           try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
         },
@@ -253,12 +239,12 @@ return new Promise((resolve, reject) => {
     };
 
     GM_xmlhttpRequest({
-      url: withXsrf(URL_PREVIEW, ""),      // token 在 header 里给
+      url: URL_PREVIEW,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-XSRF-TOKEN": "",                 // 占位，下面用 query 参数携带
         "Accept": "application/json",
+        "Referer": "https://store.epicgames.com/en-US/cart",
       },
       data: JSON.stringify(previewBody),
       anonymous: false,
@@ -302,12 +288,12 @@ return new Promise((resolve, reject) => {
         };
 
         GM_xmlhttpRequest({
-          url: withXsrf(URL_CONFIRM, ""),
+          url: URL_CONFIRM,
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-XSRF-TOKEN": "",
             "Accept": "application/json",
+            "Referer": "https://store.epicgames.com/en-US/cart",
           },
           data: JSON.stringify(confirmBody),
           anonymous: false,
