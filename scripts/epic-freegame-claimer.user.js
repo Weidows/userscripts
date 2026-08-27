@@ -4,7 +4,9 @@
 // @version      1.0.0
 // @description  ScriptCat 后台定时任务：每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单）。未登录/登录过期会检测并弹出可点击的登录提示。
 // @author       weidows
-// @crontab      * * once * 4          // 每周四首次匹配时跑一次（北京时间≈周四凌晨，避开周三晚新游上架前）；当天幂等防重跑
+// 调度：每周四首次匹配时跑一次（北京时间≈周四凌晨，避开周三晚新游上架前）；当天幂等防重跑。
+// 注意：@crontab 行不能带行内注释，否则 ScriptCat 解析定时表达式会报错。
+// @crontab      * * once * 4
 // @grant        GM_xmlhttpRequest
 // @grant        GM_log
 // @grant        GM_notification
