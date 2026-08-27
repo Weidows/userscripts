@@ -59,7 +59,7 @@ return new Promise((resolve, reject) => {
   const URL_CSRF = "https://www.epicgames.com/account/v2/refresh-csrf";
   const URL_PREVIEW = "https://payment-website-pci.ol.epicgames.com/purchase/order-preview";
   const URL_CONFIRM = "https://payment-website-pci.ol.epicgames.com/purchase/confirm-order";
-  const URL_LOGIN = "https://www.epicgames.com/id/login?redirectUrl=https%3A%2F%2Fstore.epicgames.com%2F";
+  const URL_LOGIN = "https://store.epicgames.com/";
 
   function log(...args) {
     const msg = args.map(String).join(" ");
