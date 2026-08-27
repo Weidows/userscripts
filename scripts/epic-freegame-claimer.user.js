@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Epic 每周免费游戏自动领取
 // @namespace    https://store.epicgames.com/
-// @version      1.0.0
+// @version      1.0.1
 // @description  ScriptCat 后台定时任务：每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单）。未登录/登录过期会检测并弹出可点击的登录提示。
 // @author       weidows
 // 调度：每周四首次匹配时跑一次（北京时间≈周四凌晨，避开周三晚新游上架前）；当天幂等防重跑。
