@@ -15,6 +15,35 @@
 
 > 安装按钮均为一键跳转 ScriptCat 安装页；`url` 参数为 GitHub raw 文件地址。
 
+### [Epic 每周免费游戏自动领取](epic-freegame-claimer.user.js)
+
+每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单），未登录会弹可点击的登录提示。
+
+- 类型：ScriptCat 后台定时脚本（`@crontab`）
+- 调度：`* * once * 4`（每周四首次匹配即执行，当日幂等，防重跑；已带"本周已领过"去重，不会重复下单）
+- 机制：对照 epicgames-freegames-node 的真实请求体，用带 Cookie 的 `GM_xmlhttpRequest` 走 `order-preview` → `confirm-order` 完成免费下单；公开接口 `freeGamesPromotions` 取当前免费游戏，`account/v2/refresh-csrf` 取 XSRF 并兼作登录态判定
+- 未登录处理：CSRF/下单被重定向到登录页即弹「可点击打开登录页」通知并放弃本次（重试无意义）
+- 边界：依赖浏览器里 store.epicgames.com 的登录 Cookie（同 `.epicgames.com` 域共享）；极少数情况触发 Arkose 验证码会失败并提示手动领取；兑换码类免费游戏（`isCodeRedemptionOnly`）无法自动领取，会被跳过
+
+[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/epic-freegame-claimer.user.js)
+[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](epic-freegame-claimer.user.js)
+
+#### 自定义执行时间
+
+编辑脚本元信息的 `@crontab` 行：
+
+```js
+// @crontab      * * once * 4          // 每周四首次匹配即跑（默认）
+// @crontab      10 22 once * 4        // 每周四 22:10 只跑一次（对齐北京时间新游上架后）
+// @crontab      * * once * *          // 每天检查一次（已去重，不会重复下单）
+```
+
+#### 验证
+
+- ScriptCat 脚本列表，悬停「运行状态」列查看下次执行时间，点击查看 `GM_log` 日志
+- 登录态判定：未登录时首次运行会弹「需要登录」通知，点开即跳登录页
+- 领取结果：对比领取前后库内游戏（Epic 客户端「库」页）确认
+
 ## 脚本列表
 
 ### [ModelScope 魔粒每日自动签到](modelscope-magicube-checkin.user.js)
