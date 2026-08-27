@@ -15,7 +15,7 @@
 
 > 安装按钮均为一键跳转 ScriptCat 安装页；`url` 参数为 GitHub raw 文件地址。
 
-### [Epic 每周免费游戏自动领取](epic-freegame-claimer.user.js)
+### [Epic 每周免费游戏自动领取](scripts/epic-freegame-claimer.user.js)
 
 每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单），未登录会弹可点击的登录提示。
 
@@ -25,8 +25,8 @@
 - 未登录处理：CSRF/下单被重定向到登录页即弹「可点击打开登录页」通知并放弃本次（重试无意义）
 - 边界：依赖浏览器里 store.epicgames.com 的登录 Cookie（同 `.epicgames.com` 域共享）；极少数情况触发 Arkose 验证码会失败并提示手动领取；兑换码类免费游戏（`isCodeRedemptionOnly`）无法自动领取，会被跳过
 
-[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/epic-freegame-claimer.user.js)
-[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](epic-freegame-claimer.user.js)
+[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/epic-freegame-claimer.user.js)
+[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](scripts/epic-freegame-claimer.user.js)
 
 #### 自定义执行时间
 
@@ -46,7 +46,7 @@
 
 ## 脚本列表
 
-### [ModelScope 魔粒每日自动签到](modelscope-magicube-checkin.user.js)
+### [ModelScope 魔粒每日自动签到](scripts/modelscope-magicube-checkin.user.js)
 
 每天自动访问 `https://modelscope.cn/magicube/usage?tab=consume` 触发签到领取魔粒，并查询余额确认结果。
 
@@ -55,8 +55,8 @@
 - 机制：魔搭魔粒无独立领取接口，访问页面即由后端发放；脚本用带 Cookie 的 `GM_xmlhttpRequest` 模拟访问 + 余额接口校验
 - 通知：`GM_notification` 弹「签到成功 / 失败」；运行日志见 ScriptCat 脚本列表「运行状态」列
 
-[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/modelscope-magicube-checkin.user.js)
-[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](modelscope-magicube-checkin.user.js)
+[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/modelscope-magicube-checkin.user.js)
+[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](scripts/modelscope-magicube-checkin.user.js)
 
 > 已安装 ScriptCat / Tampermonkey 后，**点击上方「一键安装」徽章**即直接弹出安装框；
 > 也可在 ScriptCat 中「新建脚本 → 从 URL 安装」粘贴 raw 链接。
