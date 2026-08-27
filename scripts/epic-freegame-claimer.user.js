@@ -1,12 +1,14 @@
 // ==UserScript==
-// @name         Epic 每周免费游戏自动领取
+// @name         Epic 每周免费游戏加购物车
 // @namespace    https://store.epicgames.com/
-// @version      1.0.4
-// @description  ScriptCat 后台定时任务：每周自动领取 Epic Games Store 的本周免费游戏（查询促销 → 校验登录态 → 下单 free 订单）。未登录/登录过期会检测并弹出可点击的登录提示。
+// @version      2.0.0
+// @description  ScriptCat 后台定时任务：每周把 Epic 的免费游戏加入购物车（避免下单时的验证码），然后给你购物车链接，你点链接手动结算即可。未登录会弹可点击登录提示，并每日重复提醒直到你处理。
 // @author       weidows
-// 调度：每周四首次匹配时跑一次（北京时间≈周四凌晨，避开周三晚新游上架前）；当天幂等防重跑。
+// 调度：默认每天跑一次（* * once * *），因为「加购物车」是幂等的，每天跑既能补加新游戏、又能每天重复提醒你（你常离开电脑注意不到弹窗）。
+//   Epic 一般在美国时间周四 ~10:00（北京时间周四晚~22:00）刷新免费游戏，每天跑也能覆盖。
+//   想只在周四跑可改为：// @crontab * * once * 4（但那样每周只提醒一次）。
 // 注意：@crontab 行不能带行内注释，否则 ScriptCat 解析定时表达式会报错。
-// @crontab      * * once * 4
+// @crontab      * * once * *
 // @grant        GM_xmlhttpRequest
 // @grant        GM_log
 // @grant        GM_notification
@@ -15,119 +17,140 @@
 // @connect      store-site-backend-static-ipv4.ak.epicgames.com
 // @connect      store.epicgames.com
 // @connect      www.epicgames.com
-// @connect      payment-website-pci.ol.epicgames.com
-// @connect      account-public-service-prod.ol.epicgames.com
 // ==/UserScript==
 
 /**
- * 说明：
- * - @crontab * * once * 4  表示每周四只成功执行一次（首次匹配的分钟即跑，当天不再重复）。
- *   Epic 一般在美国时间周四 ~10:00（北京时间周四晚~22:00）刷新免费游戏，脚本当天任意一次成功即可，
- *   会顺带把"还没上架但已免费"的游戏一并领取。想固定在周四 22:10 跑可改为：// @crontab 10 22 once * 4
- *   想每天检查可改为：// @crontab * * once * *（已带"本周已领过"去重，不会重复下单）
- * - 必须 return Promise，resolve=成功，reject=失败；失败时抛 CATRetryError 可自动重试。
- * - 后台脚本跑在沙盒里无法操作 DOM，全部用 GM_xmlhttpRequest 带 Cookie 请求（anonymous:false）。
+ * 思路（相比旧版「自动下单」）：
+ * - 自动下单会触发 Arkose 验证码，后台脚本没法过，经常失败。
+ * - 加购物车基本不触发验证码，所以改成：把本周免费游戏加进购物车 → 给你购物车链接 → 你手动点链接结算。
+ * - 「你常离开电脑注意不到弹窗」→ 用每日 cron + 购物车校验做重复提醒：
+ *     只要那些免费游戏还躺在购物车里（说明你还没结算），每天就再提醒一次；
+ *     一旦你结算了（游戏离开购物车），就停止提醒。
  *
- * 领取流程（照搬 Epic 网页下单逻辑，已对照 epicgames-freegames-node 的真实请求）：
- *   1) freeGamesPromotions  —— 拉取当前/即将免费的游戏（公开接口，无需登录）
- *   2) id/api/csrf          —— 刷新 XSRF-TOKEN Cookie（返回 204，Set-Cookie 下发；注意：
- *      绝对不能用 account/v2/refresh-csrf 当登录信号，因为它"已登录也返回 HTML 登录页"，会误判）。
- *   3) 仅对"当前免费（promotionalOffers 进行中 + discountPrice==0 + 非兑换码）且本周未领过"的游戏：
- *        GET  www.epicgames.com/store/purchase?offers=1-<ns>-<id>  → 从 HTML 刮出 #purchaseToken
- *        POST order-preview  (带 x-requested-with: <purchaseToken>) → 取 syncToken / orderId
- *        POST confirm-order   (带 x-requested-with: <purchaseToken>) → 完成免费下单
- *    ★ 关键：Epic 下单必须用购买页里的 purchaseToken 作为 x-requested-with 请求头；
- *      之前误用 X-XSRF-TOKEN 头会导致 payment 站点 401（已登录也 401）→ 误弹登录框。
+ * 流程：
+ *   1) freeGamesPromotions —— 拉当前免费游戏（公开接口）
+ *   2) CartOffersValidation —— 跳过你已经拥有的（避免反复加已拥有的游戏）
+ *   3) 逐个 addToCart (GraphQL mutation) —— 幂等，重复加无害
+ *   4) getCartItems —— 确认哪些真的在购物车里
+ *   5) 还在购物车 → 存 pending 标记 + 弹「可点击打开购物车」的常驻通知（每天重弹直到清空）
+ *      已空（你结算了/促销结束）→ 清 pending，可选通知「已结算 ✓」
  *
- * 未登录检测（以"登录页"为唯一权威信号，不再用 refresh-csrf、也不再把任何 HTML 当未登录）：
- *   - 只有 401/403 且响应是真正的登录页（含 loginId / password 表单）才视为未登录。
- *   - payment 站点偶发的 401 HTML 外壳（<title>Payment by Epic Games</title>，无登录表单）
- *     不算未登录，不会弹框（这种通常是风控/接口抖动，重试即可）。
- * 命中登录页后：弹「可点击打开登录页」的通知，并直接 reject（重试无意义，必须你重新登录）。
+ * 未登录检测：addToCart 返回 GraphQL errors 且含 auth/token/login 字样，或 401 → 视为未登录，
+ *   弹可点击登录页的常驻通知，并每天重弹直到登录成功（加车成功）。
+ *   （403 + HTML 挑战页是风控/限流，不是没登录，按「稍后重试」处理，不弹登录框。）
  *
- * 已知边界（务必看）：
- *   - 依赖浏览器里 store.epicgames.com 的登录 Cookie（同一 .epicgames.com 域共享，payment 站点也能带）。
- *   - 极少数情况 Epic 会弹 Arkose/验证码（captcha.challenge）：届时本次领取失败并通知你手动去领。
- *   - 兑换码类免费游戏（isCodeRedemptionOnly=true，如某些 DLC/礼包）无法自动领取，会被跳过并提示手动。
+ * 关键端点 / 头（来自 Epic 商店前端的公开 GraphQL）：
+ *   POST https://store.epicgames.com/graphql
+ *   必须带 X-Epic-ApiKey（商店前端写死的公开 key，非私密）。
  */
 
 return new Promise((resolve, reject) => {
   // —— 可配置项 ——
-  const COUNTRY = "US";          // 用于过滤地区可见的免费游戏；一般 US 即覆盖全球免费游戏
+  const COUNTRY = "US";
   const LOCALE = "en-US";
   const TIMEOUT_MS = 20000;
+  const EPIC_APIKEY = "98412d6a3e7c4d148c695c9d6f5c5c35"; // Epic 商店前端公开 key
+  const CART_URL = `https://store.epicgames.com/${LOCALE}/cart`;
 
-  // 端点（与 epicgames-freegames-node 保持一致）
+  // 端点
   const URL_FREE = `https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=${LOCALE}&country=${COUNTRY}&allowCountries=${COUNTRY}`;
-  const URL_CSRF = "https://www.epicgames.com/id/api/csrf";
-  const URL_PREVIEW = "https://payment-website-pci.ol.epicgames.com/purchase/order-preview";
-  const URL_CONFIRM = "https://payment-website-pci.ol.epicgames.com/purchase/confirm-order";
-  const URL_PURCHASE = "https://www.epicgames.com/store/purchase";
+  const URL_GRAPHQL = "https://store.epicgames.com/graphql";
   const URL_LOGIN = "https://store.epicgames.com/";
+
+  // 持久化键
+  const KEY_PENDING = "epic_cart_pending"; // {kind:'cart'|'login', week, offers:[{title,offerId,namespace}], firstAt, lastAt}
 
   function log(...args) {
     const msg = args.map(String).join(" ");
     try { GM_log(msg); } catch (_) {}
-    console.log("[EpicFree]", ...args);
+    console.log("[EpicCart]", ...args);
   }
 
-  // 轻量 JSON 解析，失败返回 null
   function safeJSON(text) {
     try { return JSON.parse(text); } catch (_) { return null; }
   }
 
-  // 从 id/api/csrf 的响应头里取出 XSRF-TOKEN（Set-Cookie 形式）
-  function extractXsrf(headers) {
-    if (!headers) return "";
-    const m = String(headers).match(/XSRF-TOKEN=([^;,\r\n]+)/i);
-    return m ? m[1] : "";
+  function nowISOWeek() {
+    // 简单的「年-周」标识，用来区分不同周的免费游戏
+    const d = new Date();
+    const onejan = new Date(d.getFullYear(), 0, 1);
+    const week = Math.ceil(((d - onejan) / 86400000 + onejan.getDay() + 1) / 7);
+    return `${d.getFullYear()}-W${week}`;
   }
 
-  // 从购买页 HTML 刮出 #purchaseToken 的值（Epic 下单必须带它作为 x-requested-with 头）
-  function extractPurchaseToken(html) {
-    if (!html) return "";
-    const m = String(html).match(/id=["']purchaseToken["'][^>]*value=["']([^"']+)["']/i)
-            || String(html).match(/["']purchaseToken["']\s*:\s*["']([^"']+)["']/i);
-    return m ? m[1] : "";
+  // —— GraphQL 请求封装 ——
+  function gqlRequest(query, variables) {
+    return new Promise((res) => {
+      GM_xmlhttpRequest({
+        url: URL_GRAPHQL,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "X-Epic-ApiKey": EPIC_APIKEY,
+        },
+        data: JSON.stringify({ query, variables: variables || {} }),
+        anonymous: false,
+        timeout: TIMEOUT_MS,
+        onload(r) {
+          const text = r.responseText || "";
+          const isHtml = /<(!doctype|html)/i.test(text);
+          let json = null;
+          if (!isHtml) { try { json = JSON.parse(text); } catch (_) {} }
+          res({ status: r.status, text, json, isHtml, responseHeaders: r.responseHeaders || "" });
+        },
+        onerror(e) { res({ status: (e && e.status) || 0, text: "", json: null, isHtml: false, responseHeaders: "", error: true }); },
+        ontimeout() { res({ status: 0, text: "", json: null, isHtml: false, responseHeaders: "", timeout: true }); },
+      });
+    });
   }
 
-  // 判断响应是不是 Epic 的「登录页 / 未登录重定向页」。
-  // 注意：payment-website-pci 即使已登录也可能回一个带 <title>Payment by Epic Games</title>
-  // 的 401 HTML 外壳（不含登录表单）；这个必须判为「请求被拒」，而不是「未登录」，
-  // 否则已登录也会误弹登录框。真正未登录的标志是有登录表单（loginId / 密码输入框）。
-  function isLoginPage(text) {
-    if (!/<(!doctype|html)/i.test(text || "")) return false;
-    const lower = text.toLowerCase();
-    return /name=["']?loginid|id=["']?loginid|password/i.test(lower);
+  // 是否「未登录 / 登录过期」：GraphQL errors 含 auth/token/login，或 401
+  function gqlAuthError(r) {
+    if (r.status === 401) return true;
+    const errs = (r.json && r.json.errors) || [];
+    return errs.some((e) => /auth|authentication|token_verification|login|unauthorized/i.test((e.code || "") + " " + (e.message || "")));
+  }
+  // 是否被风控/限流/网络抖动挡住（不是「没登录」）：HTML 挑战页、403、超时、网络错误
+  function gqlBlocked(r) {
+    return r.isHtml || r.status === 403 || r.timeout || r.error;
   }
 
-  // 真正的「未登录」判定：401/403 + 是登录页（含登录表单）。
-  // 401 但只是 Payment 外壳（无登录表单）→ 视为会话/接口问题，不弹登录框。
-  function isUnauthorized(rc) {
-    return (rc.status === 401 || rc.status === 403) && isLoginPage(rc.responseText);
-  }
-
-  function notifyLoginNeeded(reason) {
-    const msg = `未登录 / 登录已过期：${reason}。请点击通知登录 Epic 后，下次定时（或手动运行一次）会自动重试。`;
-    log(msg);
+  // —— 通知 ——
+  function notifyCartReady(pending) {
+    const titles = pending.offers.map((o) => o.title).join("、");
+    const text = `本周 ${pending.offers.length} 款免费游戏已在购物车，去结算：\n${titles}\n\n${CART_URL}\n（点此通知打开购物车；结算后不再提醒）`;
     try {
       GM_notification({
-        title: "Epic 免费游戏领取失败 · 需要登录",
-        text: msg + "\n\n[点击此通知打开登录页]",
-        onclick() { try { window.open(URL_LOGIN, "_blank"); } catch (_) {} },
+        title: "Epic 免费游戏已在购物车 · 去结算",
+        text,
         timeout: 0,
+        onclick() { try { window.open(CART_URL, "_blank"); } catch (_) {} },
       });
     } catch (_) {
-      try { GM_notification({ title: "Epic 免费游戏领取失败 · 需要登录", text: msg + " 登录页：" + URL_LOGIN }); } catch (__) {}
+      try { GM_notification({ title: "Epic 免费游戏已在购物车", text: text }); } catch (__) {}
     }
-    reject(msg);
+  }
+
+  function notifyLoginNeeded() {
+    const text = `未登录 / 登录已过期，无法把免费游戏加入购物车。\n请登录后下次定时会自动重试（每天提醒）。\n\n${URL_LOGIN}`;
+    try {
+      GM_notification({
+        title: "Epic 免费游戏加购物车失败 · 需要登录",
+        text,
+        timeout: 0,
+        onclick() { try { window.open(URL_LOGIN, "_blank"); } catch (_) {} },
+      });
+    } catch (_) {
+      try { GM_notification({ title: "Epic 免费游戏加购物车失败 · 需要登录", text }); } catch (__) {}
+    }
   }
 
   function notifyInfo(title, text) {
     try { GM_notification({ title, text, timeout: 10000 }); } catch (_) {}
   }
 
-  // 解析 freeGamesPromotions，返回"当前免费"列表
+  // 解析 freeGamesPromotions → 当前免费、非兑换码 列表
   function parseFreeGames(json) {
     const out = [];
     try {
@@ -135,7 +158,7 @@ return new Promise((resolve, reject) => {
       const now = Date.now();
       for (const e of elements) {
         const promos = (e.promotions && e.promotions.promotionalOffers) || [];
-        if (!promos.length) continue;                       // 没有进行中的促销
+        if (!promos.length) continue;
         const active = promos.some((po) =>
           po.promotionalOffers.some((o) => {
             const s = Date.parse(o.startDate), en = Date.parse(o.endDate);
@@ -145,14 +168,9 @@ return new Promise((resolve, reject) => {
         if (!active) continue;
         const tp = (e.price && e.price.totalPrice) || {};
         const discount = tp.discountPrice;
-        if (typeof discount !== "number" || discount !== 0) continue;  // 不是真免费
-        if (e.isCodeRedemptionOnly) continue;                          // 兑换码类无法自动领
-        out.push({
-          title: e.title,
-          offerId: e.id,
-          namespace: e.namespace,
-          url: `https://store.epicgames.com/${LOCALE}/p/${e.productSlug || e.urlSlug || e.id}`,
-        });
+        if (typeof discount !== "number" || discount !== 0) continue;
+        if (e.isCodeRedemptionOnly) continue;
+        out.push({ title: e.title, offerId: e.id, namespace: e.namespace });
       }
     } catch (err) {
       log("解析免费游戏列表失败:", err && err.message);
@@ -160,255 +178,131 @@ return new Promise((resolve, reject) => {
     return out;
   }
 
+  // —— GraphQL 片段 ——
+  const Q_OFFERS_VALIDATION = `query getOffersValidation($offers: [OfferToValidate]!) {
+    Entitlements { cartOffersValidation(offerParams: $offers) { fullyOwnedOffers { offerId namespace } } }
+  }`;
+  const M_ADD_TO_CART = `mutation addToCart($namespace: String!, $offerId: String!) {
+    Cart { addToCart(namespace: $namespace, offerId: $offerId) { success cartItem { id offerId namespace } } }
+  }`;
+  const Q_CART_ITEMS = `query getCartItems { Cart { cartItems { elements { id offerId namespace } } } }`;
+
   // —— 主流程 ——
-  log("开始 Epic 免费游戏领取任务");
+  (async () => {
+    log("开始 Epic 免费游戏加购物车任务");
 
-  GM_xmlhttpRequest({
-    url: URL_FREE,
-    method: "GET",
-    headers: { "Accept": "application/json" },
-    anonymous: false,
-    timeout: TIMEOUT_MS,
-    onload(res) {
-      const free = parseFreeGames(safeJSON(res.responseText));
-      if (!free.length) {
-        log("当前没有可领取的免费游戏（可能本周已领完或暂无免费游戏）");
-        notifyInfo("Epic 免费游戏", "本周没有可自动领取的免费游戏");
-        return resolve("no free games this week");
-      }
-      log("发现可领取免费游戏:", free.map((g) => g.title).join(", "));
-
-      // 2) 刷新 XSRF-TOKEN（id/api/csrf 返回 204，Set-Cookie 下发 XSRF-TOKEN + EPIC_SESSION_AP）
-      //    注意：不在此处判断登录态！account/v2/refresh-csrf 已登录也返回 HTML，会误判。
-      //    真正的登录判断放在 claimOne 的 order-preview（401/403/HTML 才视为未登录）。
+    // 1) 免费游戏列表
+    const freeRes = await new Promise((res) => {
       GM_xmlhttpRequest({
-        url: URL_CSRF,
-        method: "GET",
-        headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
-        anonymous: false,
-        timeout: TIMEOUT_MS,
-        onload(r2) {
-          // 204 即可；刷新 XSRF-TOKEN Cookie（下单时 Epic 仍会校验该 Cookie）
-          const got = extractXsrf(r2.responseHeaders);
-          log("CSRF 刷新完成 status=", r2.status, " xsrfCookie len=", (got || "").length);
-
-          // 本周已成功领取过的 offerId 集合（去重，避免重复下单）
-          let claimed = {};
-          try { claimed = safeJSON(GM_getValue("claimed_offers", "{}")) || {}; } catch (_) {}
-
-          const pending = free.filter((g) => !claimed[g.offerId]);
-          if (!pending.length) {
-            log("本周免费游戏已全部领取过，跳过");
-            notifyInfo("Epic 免费游戏", "本周免费游戏已全部领取 ✓");
-            return resolve("all already claimed this week");
-          }
-          log("待领取:", pending.map((g) => g.title).join(", "));
-
-          // 逐个领取
-          let idx = 0;
-          const results = [];
-
-          function claimNext() {
-            if (idx >= pending.length) {
-              // 汇总
-              const ok = results.filter((r) => r.ok).map((r) => r.title);
-              const fail = results.filter((r) => !r.ok);
-              try { GM_setValue("claimed_offers", JSON.stringify(claimed)); } catch (_) {}
-              if (ok.length) {
-                notifyInfo("Epic 免费游戏领取成功", `已领取 ${ok.length} 款：${ok.join("、")}`);
-                log("领取完成，成功:", ok.join(", "));
-              }
-              if (fail.length) {
-                const reasons = fail.map((r) => `${r.title}(${r.reason})`).join("；");
-                notifyInfo("Epic 免费游戏部分失败", reasons + "（多半是验证码，可手动领取）");
-                log("部分失败:", reasons);
-              }
-              return resolve(`claimed ${ok.length}/${pending.length}`);
-            }
-            const game = pending[idx++];
-            claimOne(game, (r) => {
-              results.push(r);
-              if (r.ok) claimed[r.offerId] = new Date().toISOString().slice(0, 10);
-              claimNext();
-            });
-          }
-          claimNext();
-        },
-        onerror(err) {
-          const msg = `CSRF 刷新请求失败 status=${err && err.status}`;
-          log(msg);
-          try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
-        },
-        ontimeout() {
-          const msg = "CSRF 刷新请求超时";
-          log(msg);
-          try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
-        },
+        url: URL_FREE, method: "GET", headers: { "Accept": "application/json" },
+        anonymous: false, timeout: TIMEOUT_MS,
+        onload: (r) => res(safeJSON(r.responseText)),
+        onerror: () => res(null), ontimeout: () => res(null),
       });
-    },
-    onerror(err) {
-      const msg = `免费游戏列表请求失败 status=${err && err.status}`;
-      log(msg);
-      try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
-    },
-    ontimeout() {
-      const msg = "免费游戏列表请求超时";
-      log(msg);
-      try { reject(new CATRetryError(msg, 120)); } catch (_) { reject(msg); }
-    },
-  });
-
-  // 领取单个游戏：
-  //   1) GET 购买页（www.epicgames.com/store/purchase?offers=...）→ 从 HTML 刮出 #purchaseToken
-  //   2) POST order-preview  → 取 syncToken / orderId / namespace / country
-  //        （purchaseToken 必须作为 x-requested-with 请求头携带，这是 Epic 下单的硬要求）
-  //   3) POST confirm-order   → 完成免费下单
-  // 对照 epicgames-freegames-node 的 purchase.ts：x-requested-with 必须是 purchaseToken，
-  // 不是 XSRF-TOKEN；之前用错头会导致 payment 站点 401 → 误弹登录框。
-  function claimOne(game, done) {
-    const purchaseUrl = `${URL_PURCHASE}?offers=1-${game.namespace}-${game.offerId}`;
-
-    // 1) 拉购买页，刮 purchaseToken
-    GM_xmlhttpRequest({
-      url: purchaseUrl,
-      method: "GET",
-      headers: { "Accept": "text/html,application/xhtml+xml" },
-      anonymous: false,
-      timeout: TIMEOUT_MS,
-      onload(r0) {
-        if (isUnauthorized(r0)) {
-          return notifyLoginNeeded("购买页被重定向到登录页");
-        }
-        const token = extractPurchaseToken(r0.responseText);
-        if (!token) {
-          return done({ ok: false, title: game.title, offerId: game.offerId, reason: "购买页未取到 purchaseToken（可能页面结构变了/被风控）" });
-        }
-        log("已取得 purchaseToken（len=" + token.length + "），开始下单:", game.title);
-
-        const previewBody = {
-          useDefault: true,
-          setDefault: false,
-          namespace: game.namespace,
-          country: COUNTRY,
-          countryName: null,
-          orderId: null,
-          orderComplete: null,
-          orderError: null,
-          orderPending: null,
-          offers: [game.offerId],
-          offerPrice: "",
-        };
-
-        GM_xmlhttpRequest({
-          url: URL_PREVIEW,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Referer": purchaseUrl,
-            "x-requested-with": token,
-          },
-          data: JSON.stringify(previewBody),
-          anonymous: false,
-          timeout: TIMEOUT_MS,
-          onload(rp) {
-            // 401/403 且是登录页才算「未登录」；Payment 外壳的 401 不带登录表单，不弹框
-            if (isUnauthorized(rp)) {
-              return notifyLoginNeeded("order-preview 被重定向到登录页");
-            }
-            const jp = safeJSON(rp.responseText);
-            if (!jp || !jp.orderResponse) {
-              return done({ ok: false, title: game.title, offerId: game.offerId, reason: "order-preview 无返回" });
-            }
-            const orderId = jp.orderId || (jp.orderResponse && jp.orderResponse.orderId);
-            const syncToken = jp.syncToken || (jp.orderResponse && jp.orderResponse.syncToken);
-            const ns = jp.namespace || game.namespace;
-            const country = jp.country || COUNTRY;
-            if (!orderId || !syncToken) {
-              return done({ ok: false, title: game.title, offerId: game.offerId, reason: "缺少 orderId/syncToken" });
-            }
-
-            const confirmBody = {
-              useDefault: true,
-              setDefault: false,
-              namespace: ns,
-              country: country,
-              countryName: null,
-              orderId: orderId,
-              orderComplete: false,
-              orderError: false,
-              orderPending: false,
-              offers: [game.offerId],
-              includeAccountBalance: false,
-              totalAmount: 0,
-              affiliateId: "",
-              creatorSource: "",
-              threeDSToken: "",
-              voucherCode: null,
-              syncToken: syncToken,
-              isFreeOrder: true,
-            };
-
-            GM_xmlhttpRequest({
-              url: URL_CONFIRM,
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Referer": purchaseUrl,
-                "x-requested-with": token,
-              },
-              data: JSON.stringify(confirmBody),
-              anonymous: false,
-              timeout: TIMEOUT_MS,
-              onload(rc) {
-                // 401/403 且是登录页才算「未登录」；Payment 外壳的 401 不带登录表单，不弹框
-                if (isUnauthorized(rc)) {
-                  return notifyLoginNeeded("confirm-order 被重定向到登录页");
-                }
-                const jc = safeJSON(rc.responseText);
-                // 验证码拦截
-                const errCode = (jc && (jc.errorCode || (jc.orderResponse && jc.orderResponse.errorCode))) || "";
-                if (/captcha/i.test(errCode) || /captcha/i.test(rc.responseText || "")) {
-                  return done({ ok: false, title: game.title, offerId: game.offerId, reason: "触发验证码" });
-                }
-                // 已拥有 / 完成
-                const status = (jc && jc.orderResponse && (jc.orderResponse.orderStatus || jc.orderResponse.status)) || "";
-                const body = (rc.responseText || "").toLowerCase();
-                if (/already (own|claimed|purchased)/i.test(body) || status === "COMPLETED" || (jc && jc.orderComplete === true)) {
-                  return done({ ok: true, title: game.title, offerId: game.offerId, reason: "已拥有/完成" });
-                }
-                if (jc && (jc.orderComplete === true || /complete/i.test(status))) {
-                  return done({ ok: true, title: game.title, offerId: game.offerId });
-                }
-                // 兜底：成功常见特征
-                if (rc.status === 200 && (status === "COMPLETED" || body.includes("\"orderComplete\":true") || body.includes("purchaseComplete"))) {
-                  return done({ ok: true, title: game.title, offerId: game.offerId });
-                }
-                done({ ok: false, title: game.title, offerId: game.offerId, reason: `confirm 异常 status=${rc.status}` });
-              },
-              onerror(err) {
-                done({ ok: false, title: game.title, offerId: game.offerId, reason: `confirm 失败 status=${err && err.status}` });
-              },
-              ontimeout() {
-                done({ ok: false, title: game.title, offerId: game.offerId, reason: "confirm 超时" });
-              },
-            });
-          },
-          onerror(err) {
-            done({ ok: false, title: game.title, offerId: game.offerId, reason: `preview 失败 status=${err && err.status}` });
-          },
-          ontimeout() {
-            done({ ok: false, title: game.title, offerId: game.offerId, reason: "preview 超时" });
-          },
-        });
-      },
-      onerror(err) {
-        done({ ok: false, title: game.title, offerId: game.offerId, reason: `购买页失败 status=${err && err.status}` });
-      },
-      ontimeout() {
-        done({ ok: false, title: game.title, offerId: game.offerId, reason: "购买页超时" });
-      },
     });
-  }
+    const free = parseFreeGames(freeRes);
+    if (!free.length) {
+      log("当前没有可加购物车的免费游戏");
+      try { GM_setValue(KEY_PENDING, ""); } catch (_) {}
+      notifyInfo("Epic 免费游戏", "本周没有可加购物车的免费游戏");
+      return resolve("no free games");
+    }
+    log("当前免费游戏:", free.map((g) => g.title).join(", "));
+
+    // 2) 跳过已拥有的（避免反复加已拥有的游戏）
+    let toAdd = free;
+    try {
+      const vr = await gqlRequest(Q_OFFERS_VALIDATION, {
+        offers: free.map((g) => ({ offerId: g.offerId, namespace: g.namespace })),
+      });
+      if (vr.json && vr.json.data && vr.json.data.Entitlements) {
+        const owned = new Set(
+          (vr.json.data.Entitlements.cartOffersValidation.fullyOwnedOffers || []).map((o) => o.offerId)
+        );
+        const skipped = free.filter((g) => owned.has(g.offerId)).map((g) => g.title);
+        toAdd = free.filter((g) => !owned.has(g.offerId));
+        if (skipped.length) log("已拥有、跳过:", skipped.join(", "));
+      }
+    } catch (_) {}
+
+    if (!toAdd.length) {
+      log("免费游戏都已拥有，无需加购物车");
+      try { GM_setValue(KEY_PENDING, ""); } catch (_) {}
+      notifyInfo("Epic 免费游戏", "本周免费游戏你都已拥有 ✓");
+      return resolve("all owned");
+    }
+
+    // 3) 逐个加购物车
+    const addedOk = [];
+    let authFailed = false, blocked = false;
+    for (const g of toAdd) {
+      const r = await gqlRequest(M_ADD_TO_CART, { namespace: g.namespace, offerId: g.offerId });
+      if (gqlAuthError(r)) { authFailed = true; log("加购物车未登录:", g.title); continue; }
+      if (gqlBlocked(r)) { blocked = true; log("加购物车被风控/限流:", g.title, "status=", r.status); continue; }
+      const ok = r.json && r.json.data && r.json.data.Cart && r.json.data.Cart.addToCart && r.json.data.Cart.addToCart.success;
+      if (ok) { addedOk.push(g); log("已加入购物车:", g.title); }
+      else { log("加购物车返回异常:", g.title, (r.json && JSON.stringify(r.json.errors)) || r.status); }
+    }
+
+    // 未登录：弹登录框 + 每日重提醒，直到登录成功
+    if (authFailed && addedOk.length === 0) {
+      log("全部加购物车失败（未登录），等待登录后重试");
+      const pending = { kind: "login", week: nowISOWeek(), offers: toAdd.map((g) => ({ title: g.title, offerId: g.offerId, namespace: g.namespace })), firstAt: Date.now(), lastAt: Date.now() };
+      try { GM_setValue(KEY_PENDING, JSON.stringify(pending)); } catch (_) {}
+      notifyLoginNeeded();
+      return resolve("login needed");
+    }
+    if (blocked && addedOk.length === 0) {
+      log("加购物车被风控拦截，下次定时重试");
+      notifyInfo("Epic 免费游戏", "加购物车被风控拦截，下次定时会自动重试");
+      return resolve("blocked, retry later");
+    }
+
+    // 4) 确认哪些真的在购物车里
+    const cartRes = await gqlRequest(Q_CART_ITEMS, {});
+    let inCart = [];
+    if (cartRes.json && cartRes.json.data && cartRes.json.data.Cart) {
+      const elems = (cartRes.json.data.Cart.cartItems && cartRes.json.data.Cart.cartItems.elements) || [];
+      const inCartIds = new Set(elems.map((e) => e.offerId));
+      inCart = addedOk.filter((g) => inCartIds.has(g.offerId));
+    }
+    log("确认在购物车里:", inCart.map((g) => g.title).join(", ") || "(无)");
+
+    // 5) 处理 pending / 重复提醒
+    let prev = {};
+    try { prev = safeJSON(GM_getValue(KEY_PENDING, "")) || {}; } catch (_) {}
+
+    if (inCart.length) {
+      // 之前是 login 状态但现在已经加成功了 → 清掉 login 标记，转成 cart 提醒
+      const pending = {
+        kind: "cart",
+        week: nowISOWeek(),
+        offers: inCart.map((g) => ({ title: g.title, offerId: g.offerId, namespace: g.namespace })),
+        firstAt: prev.kind === "cart" ? (prev.firstAt || Date.now()) : Date.now(),
+        lastAt: Date.now(),
+      };
+      try { GM_setValue(KEY_PENDING, JSON.stringify(pending)); } catch (_) {}
+      // 每天重提醒（同一天手动多次运行也不重复弹）
+      const sinceLast = Date.now() - (prev.lastAt || 0);
+      if (prev.kind !== "cart" || sinceLast >= 20 * 3600 * 1000) {
+        notifyCartReady(pending);
+        log("已提醒去购物车结算（首次或距上次提醒已超过 20h）");
+      } else {
+        log("购物车仍有未结算游戏，但今天已提醒过，跳过重复弹");
+      }
+      return resolve(`in cart: ${inCart.length}`);
+    }
+
+    // 购物车空了（你结算了，或促销结束，或全被风控）→ 清 pending
+    if (prev.kind === "cart") {
+      log("购物车已清空，视为已结算，停止提醒");
+      notifyInfo("Epic 免费游戏", "购物车里的免费游戏已结算 ✓");
+    }
+    try { GM_setValue(KEY_PENDING, ""); } catch (_) {}
+    return resolve("cart empty / done");
+  })().catch((err) => {
+    log("任务异常:", err && err.message);
+    try { reject(new CATRetryError("Epic 加购物车异常: " + (err && err.message), 120)); }
+    catch (_) { resolve("error: " + (err && err.message)); }
+  });
 });
