@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Epic 每周免费游戏加购物车
 // @namespace    https://store.epicgames.com/
-// @version      2.0.0
+// @version      2.0.1
 // @description  ScriptCat 后台定时任务：每周把 Epic 的免费游戏加入购物车（避免下单时的验证码），然后给你购物车链接，你点链接手动结算即可。未登录会弹可点击登录提示，并每日重复提醒直到你处理。
 // @author       weidows
 // 调度：默认每天跑一次（* * once * *），因为「加购物车」是幂等的，每天跑既能补加新游戏、又能每天重复提醒你（你常离开电脑注意不到弹窗）。
@@ -235,13 +235,27 @@ return new Promise((resolve, reject) => {
     // 3) 逐个加购物车
     const addedOk = [];
     let authFailed = false, blocked = false;
+
+    // 串行加购物车：每个之间留 1.5s 间隔，且被风控/限流时重试一次。
+    // 之前并发连发会被 Cloudflare 把第二个请求挡掉（表现为「只加了一个」），串行 + 重试可避免。
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function addOne(g) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const r = await gqlRequest(M_ADD_TO_CART, { namespace: g.namespace, offerId: g.offerId });
+        if (gqlAuthError(r)) { authFailed = true; log("加购物车未登录:", g.title); return; }
+        if (gqlBlocked(r)) {
+          if (attempt === 1) { log("加购物车被风控，1.5s 后重试:", g.title, "status=", r.status); await sleep(1500); continue; }
+          blocked = true; log("加购物车被风控(重试仍失败):", g.title, "status=", r.status); return;
+        }
+        const ok = r.json && r.json.data && r.json.data.Cart && r.json.data.Cart.addToCart && r.json.data.Cart.addToCart.success;
+        if (ok) { addedOk.push(g); log("已加入购物车:", g.title); }
+        else { log("加购物车返回异常:", g.title, (r.json && JSON.stringify(r.json.errors)) || r.status); }
+        return;
+      }
+    }
     for (const g of toAdd) {
-      const r = await gqlRequest(M_ADD_TO_CART, { namespace: g.namespace, offerId: g.offerId });
-      if (gqlAuthError(r)) { authFailed = true; log("加购物车未登录:", g.title); continue; }
-      if (gqlBlocked(r)) { blocked = true; log("加购物车被风控/限流:", g.title, "status=", r.status); continue; }
-      const ok = r.json && r.json.data && r.json.data.Cart && r.json.data.Cart.addToCart && r.json.data.Cart.addToCart.success;
-      if (ok) { addedOk.push(g); log("已加入购物车:", g.title); }
-      else { log("加购物车返回异常:", g.title, (r.json && JSON.stringify(r.json.errors)) || r.status); }
+      await addOne(g);
+      await sleep(1500); // 间隔，避免连发被风控
     }
 
     // 未登录：弹登录框 + 每日重提醒，直到登录成功
