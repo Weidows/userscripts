@@ -77,6 +77,50 @@
 - ScriptCat 脚本列表，悬停「运行状态」列查看下次执行时间，点击查看 `GM_log` 日志
 - 对比签到前后「我的魔粒」余额变化确认是否真正领取
 
+### [OtakuFans 每日自动签到](scripts/otakufans-rewards-checkin.user.js)
+
+每天自动领取 OtakuFans 的「7 天登录奖励」（credits / 第 7 天视频券），后台静默执行，无需打开网页。
+
+- 类型：ScriptCat 后台定时脚本（`@crontab` + `@storageName` 共享存储）
+- 调度：`* * once * *`（每天首次匹配即执行，当日幂等，防重跑）
+- 需配套安装 [OtakuFans 授权同步](scripts/otakufans-rewards-auth.user.js)（页面脚本，`@match https://otakufans.net/*`），两者靠同一个 `@storageName` 传授权信息
+- 机制：签到接口 `POST /api/credits/daily-reward` 只认 `Authorization: Bearer <Firebase ID Token>`，带 Cookie 一样 401。ID Token 由站点自己的 Firebase SDK 存在浏览器 IndexedDB（`firebaseLocalStorageDb`），后台沙盒读不到 → 授权同步脚本在你访问 otakufans.net 时把 `refreshToken` + 设备指纹写进共享存储，后台脚本每天用它换新 ID Token（`securetoken.googleapis.com`，Firebase 会轮换 refreshToken，脚本已回写）→ 查状态 → 领取
+- 顺手补签：授权同步脚本在你逛站时若发现当天还没领，会直接领掉（授权链路万一失效也不漏签）
+- 通知：领取成功弹「+X credits · 连续 N 天」（点击打开 rewards 页）；未授权 / 授权失效弹**常驻**可点击通知要求重新访问一次网站；被风控（`ipBlocklisted` / `ipWindow` / `deviceWindow`）或免费额度到顶时说明原因并放弃当天
+- 边界：站点要求「任意充值解锁每日奖励」时不做绕过；未登录 / 无授权信息不重试（重试无意义），网络类错误 `CATRetryError` 60s 后重试
+
+[![安装到 ScriptCat](https://img.shields.io/badge/授权同步-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-auth.user.js)
+[![安装到 ScriptCat](https://img.shields.io/badge/每日签到-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-checkin.user.js)
+[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](scripts/otakufans-rewards-checkin.user.js)
+
+#### 安装顺序与验证
+
+1. 两个脚本**都要装**（先装哪个都行，授权同步脚本装好后刷新一次网站才生效）
+2. 打开任意 `otakufans.net` 页面（已登录状态），`F12 → 控制台`搜 `[OtakuFans授权]`，应看到：
+
+   ```
+   [OtakuFans授权] 授权信息已同步到共享存储 uid=xxx fp=xxxxxxxxxxxx…
+   [OtakuFans授权] 补签 GET status=200 …
+   ```
+
+   若当天没领过，紧接着就是 `补签 POST status=200 …`（页面右下角弹出「OtakuFans 已自动签到 +N credits」）
+3. 后台脚本：ScriptCat 脚本列表里悬停「运行状态」列可看下次执行时间，点开看 `GM_log` 日志；手动点「运行一次」应输出 `skip: already claimed <日期>`
+4. 最终以站点 `https://otakufans.net/rewards` 页面的余额 / 连续天数是否为今日已领取为准
+
+> 兜底：如果哪天 `@storageName` 共享失效（ScriptCat 里标注为实验特性），在 otakufans.net 页面点脚本菜单「复制 OtakuFans 授权信息（手动兜底）」，
+> 把 JSON 里的 `apiKey` / `refreshToken` / `fingerprint` / `timeZone` 四项手动填进**签到脚本**的存储即可。
+> 首次抓取依赖网站的 Firebase 登录态（IndexedDB），Firefox 无 `indexedDB.databases()` 会跳过自动抓取，只能用上面的手动兜底。
+
+#### 自定义执行时间
+
+编辑脚本元信息的 `@crontab` 行：
+
+```js
+// @crontab      * * once * *          // 每天首次匹配即跑（默认）
+// @crontab      10 9 once * *         // 每天 09:10 只跑一次
+// @crontab      * 9-18 once * *       // 每天 9:00–18:59 之间只跑一次
+```
+
 ## 说明
 
 - 后台脚本运行在沙盒中，无法操作 DOM，均通过 `GM_xmlhttpRequest` 带 Cookie 请求。
