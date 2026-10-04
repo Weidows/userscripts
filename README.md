@@ -121,6 +121,51 @@
 // @crontab      * 9-18 once * *       // 每天 9:00–18:59 之间只跑一次
 ```
 
+## 页面脚本
+
+### [Bangumi 番源 & BT 磁链助手](scripts/bgm-anime-source-helper.user.js)
+
+在 Bangumi 番剧页直接给出**「在哪能在线看」**和**「哪里能下 BT」**，补上 Bangumi 本身没有的资源追踪能力
+（起因：Animeko 依赖第三方站解析，上游一变就失效；本脚本改为只依赖社区维护的番剧站点映射 + 各站 RSS）。
+
+- 类型：**页面脚本**（非后台定时），`@match https://bgm.tv/subject/*`、`/ep/*`（含 `bangumi.tv` / `www.bgm.tv`）
+- **在线观看**：一次性拉取 [`bangumi-data`](https://github.com/bangumi-data/bangumi-data)（社区维护的番剧↔各站 id 映射，实测 `@0.3` 原文 7.5 MB / 8800+ 条，精简为 `{站:id}` 索引后约 1.6 MB，缓存 3 天）建索引，按番剧精确生成深链
+  - 启用理由：这正是 Animeko 番源的同一套上游数据，社区持续维护，上游改站点只用等数据刷新
+  - 站点 URL 模板**直接采用数据自带的 `siteMeta`**（官方模板优先，内置模板仅兜底），所以站点改 URL 不用改脚本
+  - 覆盖 B站 / 巴哈姆特動畫瘋 / Netflix / 木棉花 / Ani-One / AcFun / 爱奇艺 / 腾讯 / 优酷 / Viu / ABEMA / Crunchyroll 等 30+ 站
+  - **B站支持分集直达**：`media_id` →（`pgc/review/user`）`season_id` →（`pgc/view/web/season`）逐集 `ep` id，直出 `.../bangumi/play/ep{id}`
+  - 番剧不在索引里（新番常见）或没有映射时，自动降级为**各站站内搜索**兜底，永不空手
+- **BT 索引**：聚合 5 个源，全部走 RSS（比爬网页稳得多，且不受前端改版影响）
+  - 蜜柑计划（优先用 bangumi-data 的 `mikan` id 走 `RSS/Bangumi` 精确订阅，取不到再退回 `RSS/Search`）
+  - 动漫花园 / Nyaa / ACGNX / ACG.RIP
+  - **磁链获取方式（实测）**：动漫花园与 ACGNX 的 RSS `<enclosure>` **本身就是 magnet**，直接可点；Nyaa 由 `<nyaa:infoHash>` 合成 magnet；蜜柑由 `/Home/Episode/{40位hash}` 合成（已验证该 hash 即 infohash）；ACG.RIP 无磁链，只给 `.torrent` + 详情页
+- **筛选策略**（设置面板可调，默认即好用）：源权重 → 画质（2160>1080>720）→ 字幕（简>繁>日>英）→ 字幕组优先/拉黑 → 集数命中 → 做种数 → 时效；默认屏蔽 `PV/CM/NCOP/NCED/MENU/预告/Sample` 等
+- **按集**：番剧页与章节页（`/subject/{id}/ep`）每一集后注入 `🔍 BT`，点击展开该集的磁链；整季番剧页则给整季列表 + 集号筛选
+- 其他：结果本地缓存（默认 60 min，可清空）、同源请求串行 + 间隔（防触发风控）、失败单源不影响其余源
+
+[![安装到 ScriptCat](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/bgm-anime-source-helper.user.js)
+[![查看源码](https://img.shields.io/badge/源码-GitHub-181717.svg)](scripts/bgm-anime-source-helper.user.js)
+
+#### 验证
+
+先在浏览器登录 `bgm.tv`（脚本要用登录态读页面、并调用 `api.bgm.tv`），然后装脚本，打开任一动画条目页：
+
+1. 顶部应出现 **🎬 番源 & BT 磁链** 面板，三个页签：在线观看 / BT 下载 / 设置
+2. 「在线观看」选一部有正版源的番（如 `https://bgm.tv/subject/400602` 葬送的芙莉莲）：
+   - 应看到 `哔哩哔哩` 等按钮；点开是 `.../bangumi/media/md{id}`
+   - 下面还有 **B站分集直达**（`第1集`…），点开 URL 形如 `https://www.bilibili.com/bangumi/play/ep779775`
+3. 「BT 下载」：默认关键词 = 中文名，点「搜索」，列表每条应有 `磁链`（点它应唤起 qBittorrent/迅雷等；没装客户端则无反应）、`种子`、`详情`
+4. 打开 `https://bgm.tv/subject/400602/ep`，每一集右侧应有 `🔍 BT` 按钮，点击展开该集结果
+5. 控制台过滤 `[bgmh]` 可看日志（bangumi-data 条数、各源失败原因等）
+
+> 注意：BT 源可用性随上游波动（这正是本脚本要摆脱的痛点，但 RSS 比网页解析稳得多）。若某源长期 403/超时，
+> 在「设置」里取消勾选它，或换关键词（日文原名查 Nyaa 更准，中文名查蜜柑/花园更准）。
+
+#### 自定义策略
+
+面板「设置」页签（也可点油猴菜单）可改：画质/字幕/字幕组优先顺序、字幕组拉黑、屏蔽关键词、每源条数、
+最低做种、只显示带磁链、请求间隔、缓存时长。修改立即生效（搜索缓存需点「清空搜索缓存」）。
+
 ## 说明
 
 - 后台脚本运行在沙盒中，无法操作 DOM，均通过 `GM_xmlhttpRequest` 带 Cookie 请求。
