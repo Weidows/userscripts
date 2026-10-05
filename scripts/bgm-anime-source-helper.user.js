@@ -2,7 +2,7 @@
 // @name         Bangumi 番源 & BT 磁链助手
 // @name:zh-CN   Bangumi 番源 & BT 磁链助手
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.0.0
+// @version      1.0.1
 // @description  在 Bangumi 番剧页直接看到「在哪能在线看」和「哪里能下 BT」。在线观看用 bangumi-data 官源映射（bilibili / 巴哈姆特動畫瘋 / Netflix / 木棉花 / Ani-One 等）；BT 聚合动漫花园 / 蜜柑计划 / Nyaa / ACG.RIP / ACGNX，支持按集筛选、画质与字幕组策略、本地缓存。
 // @author       Weidows
 // @license      MIT
@@ -772,54 +772,97 @@
   // 7. UI
   // ==========================================================================
 
+  // ==========================================================================
+  // 8. 样式
+  // 颜色全部走 CSS 变量，深浅两套值挂在 html[data-theme] 上——bangumi 的主题开关
+  // 就是改 <html data-theme="dark">，所以这里能自动跟随，不需要 JS 监听。
+  // 强调色用站点自带的 --primary-color，跟随用户选的粉/蓝/绿/紫/橙/红主题色。
+  // 每条规则都成对写 color + background（或都不写走继承），避免「半配对」在
+  // 深色下变成白底白字——这正是之前踩的坑。
+  // ==========================================================================
   const CSS = `
-.bgmh-box{border:1px solid #e8e3dc;border-radius:4px;background:#fff;margin:10px 0;font-size:13px;line-height:1.7;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+:root{
+--bgmh-bg:#fff;--bgmh-fg:#333;--bgmh-muted:#999;--bgmh-border:#e8e8e8;
+--bgmh-surface:#f9f9f9;--bgmh-surface-2:#f2f2f2;--bgmh-hover:#f7f7f7;
+--bgmh-head-1:#fbfaf8;--bgmh-head-2:#f2efeb;
+--bgmh-tag-bg:#eee;--bgmh-tag-fg:#888;
+--bgmh-res-bg:#eaf3fb;--bgmh-res-fg:#3c7bb0;
+--bgmh-ep-bg:#fdeef0;--bgmh-ep-fg:#c4455a;
+--bgmh-ok-bg:#eef4ee;--bgmh-ok-fg:#4e7d4e;--bgmh-ok-border:#d6e3d6;
+--bgmh-err-bg:#fdf1f0;--bgmh-err-fg:#c0584f;--bgmh-err-border:#f5ddd9;
+--bgmh-in-bg:#fff;--bgmh-in-fg:#333;--bgmh-in-border:#ddd;
+--bgmh-accent:var(--primary-color,#f09199);--bgmh-accent-fg:#fff
+}
+html[data-theme=dark]{
+--bgmh-bg:#2d2e2f;--bgmh-fg:#e9e9e9;--bgmh-muted:#9a9a9a;--bgmh-border:#484848;
+--bgmh-surface:#353535;--bgmh-surface-2:#3d3d3f;--bgmh-hover:#3a3a3c;
+--bgmh-head-1:#3a3a3b;--bgmh-head-2:#313133;
+--bgmh-tag-bg:#3d3d3f;--bgmh-tag-fg:#b9b9b9;
+--bgmh-res-bg:#27405a;--bgmh-res-fg:#a3cff2;
+--bgmh-ep-bg:#4a2b31;--bgmh-ep-fg:#f2aeb8;
+--bgmh-ok-bg:#2c3a2c;--bgmh-ok-fg:#a6d6a6;--bgmh-ok-border:#3f5a3f;
+--bgmh-err-bg:#43292a;--bgmh-err-fg:#f2b0a9;--bgmh-err-border:#5c3a38;
+--bgmh-in-bg:#303132;--bgmh-in-fg:#e0e0e1;--bgmh-in-border:#4a4b4d;
+--bgmh-accent:var(--primary-color,#f09199);--bgmh-accent-fg:#fff
+}
+.bgmh-box{border:1px solid var(--bgmh-border);border-radius:4px;background:var(--bgmh-bg);color:var(--bgmh-fg);margin:10px 0;font-size:13px;line-height:1.7;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06)}
 .bgmh-box *{box-sizing:border-box}
-.bgmh-head{display:flex;align-items:center;gap:8px;padding:7px 10px;background:linear-gradient(#fbfaf8,#f3f0eb);border-bottom:1px solid #e8e3dc;font-weight:600;color:#4b453d;cursor:pointer;user-select:none}
+.bgmh-box a{color:var(--bgmh-fg)}
+/* 让原生控件（勾选框、数字微调、滚动条）也跟着站点深浅 */
+.bgmh-box,.bgmh-epres{color-scheme:light}
+html[data-theme=dark] .bgmh-box,html[data-theme=dark] .bgmh-epres{color-scheme:dark}
+.bgmh-head{display:flex;align-items:center;gap:8px;padding:7px 10px;background:linear-gradient(var(--bgmh-head-1),var(--bgmh-head-2));border-bottom:1px solid var(--bgmh-border);font-weight:600;color:var(--bgmh-fg);cursor:pointer;user-select:none}
 .bgmh-head .bgmh-sp{flex:1}
-.bgmh-head .bgmh-ic{font-weight:400;color:#9b9287;font-size:12px}
-.bgmh-btn{display:inline-block;padding:1px 8px;border:1px solid #d9d3ca;border-radius:3px;background:#fff;color:#6c655c;cursor:pointer;font-size:12px;line-height:1.9;text-decoration:none!important;white-space:nowrap}
-.bgmh-btn:hover{background:#f6f3ef;border-color:#c3bbb0;color:#4b453d}
-.bgmh-btn.on{background:#f09199;border-color:#f09199;color:#fff}
+.bgmh-head .bgmh-ic{font-weight:400;color:var(--bgmh-muted);font-size:12px}
+.bgmh-btn{display:inline-block;padding:1px 8px;border:1px solid var(--bgmh-border);border-radius:3px;background:var(--bgmh-surface);color:var(--bgmh-fg);cursor:pointer;font-size:12px;line-height:1.9;text-decoration:none!important;white-space:nowrap}
+.bgmh-btn:hover{background:var(--bgmh-surface-2);border-color:var(--bgmh-muted)}
+.bgmh-btn.on{background:var(--bgmh-accent);border-color:var(--bgmh-accent);color:var(--bgmh-accent-fg)}
 .bgmh-btn.mini{padding:0 6px;font-size:11px;line-height:1.8}
-.bgmh-tabs{display:flex;gap:0;border-bottom:1px solid #eee9e2;background:#faf8f5}
-.bgmh-tab{padding:6px 14px;cursor:pointer;color:#8a8177;font-size:13px;border-bottom:2px solid transparent}
-.bgmh-tab.on{color:#e5697a;border-bottom-color:#f09199;background:#fff;font-weight:600}
+.bgmh-tabs{display:flex;gap:0;border-bottom:1px solid var(--bgmh-border);background:var(--bgmh-surface)}
+.bgmh-tab{padding:6px 14px;cursor:pointer;color:var(--bgmh-muted);font-size:13px;border-bottom:2px solid transparent}
+.bgmh-tab:hover{color:var(--bgmh-fg)}
+.bgmh-tab.on{color:var(--bgmh-accent);border-bottom-color:var(--bgmh-accent);background:var(--bgmh-bg);font-weight:600}
 .bgmh-pane{display:none;padding:10px}
 .bgmh-pane.on{display:block}
 .bgmh-sites{display:flex;flex-wrap:wrap;gap:6px}
-.bgmh-src{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border:1px solid #e2ddd5;border-radius:14px;background:#fdfcfa;color:#5a534a!important;text-decoration:none!important;font-size:12px}
-.bgmh-src:hover{background:#f6f1ec;border-color:#f09199;color:#e5697a!important}
-.bgmh-src i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#c9c2b8}
+.bgmh-src{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border:1px solid var(--bgmh-border);border-radius:14px;background:var(--bgmh-surface);color:var(--bgmh-fg)!important;text-decoration:none!important;font-size:12px}
+.bgmh-src:hover{background:var(--bgmh-surface-2);border-color:var(--bgmh-accent);color:var(--bgmh-accent)!important}
+.bgmh-src i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--bgmh-muted)}
 .bgmh-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
-.bgmh-toolbar input[type=text]{flex:1;min-width:150px;padding:3px 7px;border:1px solid #ddd7cf;border-radius:3px;font-size:12px}
-.bgmh-toolbar label{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#7a7268;cursor:pointer}
-.bgmh-sub{color:#9b9287;font-size:12px;margin:6px 0}
+.bgmh-toolbar label{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--bgmh-muted);cursor:pointer}
+.bgmh-sub{color:var(--bgmh-muted);font-size:12px;margin:6px 0}
 .bgmh-list{display:flex;flex-direction:column;gap:5px}
-.bgmh-item{display:flex;gap:7px;align-items:flex-start;padding:6px 8px;border:1px solid #efeae3;border-radius:3px;background:#fdfcfa}
-.bgmh-item:hover{border-color:#e6ddd1;background:#fff9f5}
-.bgmh-item .bgmh-t{flex:1;word-break:break-all;color:#4b453d;font-size:12.5px;line-height:1.6}
+.bgmh-item{display:flex;gap:7px;align-items:flex-start;padding:6px 8px;border:1px solid var(--bgmh-border);border-radius:3px;background:var(--bgmh-surface)}
+.bgmh-item:hover{border-color:var(--bgmh-muted);background:var(--bgmh-hover)}
+.bgmh-item .bgmh-t{flex:1;word-break:break-all;color:var(--bgmh-fg);font-size:12.5px;line-height:1.6}
 .bgmh-tags{margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
-.bgmh-tag{font-size:10.5px;padding:0 5px;border-radius:2px;background:#f0ece6;color:#877e73;line-height:1.7}
+.bgmh-tag{font-size:10.5px;padding:0 5px;border-radius:2px;background:var(--bgmh-tag-bg);color:var(--bgmh-tag-fg);line-height:1.7}
 .bgmh-tag.s{margin-left:auto}
-.bgmh-tag.res{background:#eaf3fb;color:#3c7bb0}
-.bgmh-tag.ep{background:#fdeef0;color:#d75f70}
+.bgmh-tag.res{background:var(--bgmh-res-bg);color:var(--bgmh-res-fg)}
+.bgmh-tag.ep{background:var(--bgmh-ep-bg);color:var(--bgmh-ep-fg)}
 .bgmh-act{display:flex;gap:4px;flex-shrink:0;padding-top:1px}
-.bgmh-a{font-size:11.5px;padding:1px 7px;border-radius:3px;text-decoration:none!important;line-height:1.9;white-space:nowrap}
-.bgmh-a.magnet{background:#f09199;color:#fff!important}
-.bgmh-a.magnet:hover{background:#e07d86}
-.bgmh-a.torrent{background:#eef4ee;color:#5a8a5a!important;border:1px solid #d6e3d6}
-.bgmh-a.page{background:#f4f2ef;color:#7a7268!important;border:1px solid #e2ddd5}
-.bgmh-empty{color:#a49b90;font-size:12px;padding:10px;text-align:center}
-.bgmh-err{color:#c0584f;font-size:12px;padding:6px 8px;background:#fdf1f0;border:1px solid #f5ddd9;border-radius:3px}
-.bgmh-loading{color:#a49b90;font-size:12px;padding:8px;text-align:center}
-.bgmh-epbtn{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid #e2ddd5;border-radius:3px;background:#faf8f5;color:#9b9287;cursor:pointer;font-size:11px;vertical-align:middle}
-.bgmh-epbtn:hover{border-color:#f09199;color:#e5697a;background:#fff}
-.bgmh-epres{margin:6px 0 10px;padding:8px;border-left:3px solid #f09199;background:#fdfaf8;border-radius:3px}
+.bgmh-a{font-size:11.5px;padding:1px 7px;border-radius:3px;text-decoration:none!important;line-height:1.9;white-space:nowrap;font-weight:600}
+.bgmh-a.magnet{background:var(--bgmh-accent);color:var(--bgmh-accent-fg)!important}
+.bgmh-a.magnet:hover{filter:brightness(.9)}
+.bgmh-a.torrent{background:var(--bgmh-ok-bg);color:var(--bgmh-ok-fg)!important;border:1px solid var(--bgmh-ok-border)}
+.bgmh-a.torrent:hover{filter:brightness(.95)}
+.bgmh-a.page{background:var(--bgmh-surface);color:var(--bgmh-fg)!important;border:1px solid var(--bgmh-border)}
+.bgmh-a.page:hover{background:var(--bgmh-surface-2)}
+.bgmh-empty{color:var(--bgmh-muted);font-size:12px;padding:10px;text-align:center}
+.bgmh-err{color:var(--bgmh-err-fg);font-size:12px;padding:6px 8px;background:var(--bgmh-err-bg);border:1px solid var(--bgmh-err-border);border-radius:3px}
+.bgmh-loading{color:var(--bgmh-muted);font-size:12px;padding:8px;text-align:center}
+.bgmh-epbtn{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--bgmh-border);border-radius:3px;background:var(--bgmh-surface);color:var(--bgmh-muted);cursor:pointer;font-size:11px;line-height:1.7;vertical-align:middle}
+.bgmh-epbtn:hover{border-color:var(--bgmh-accent);color:var(--bgmh-accent);background:var(--bgmh-bg)}
+.bgmh-epres{margin:6px 0 10px;padding:8px;border-left:3px solid var(--bgmh-accent);background:var(--bgmh-surface);border-radius:3px;color:var(--bgmh-fg)}
 .bgmh-set{display:grid;grid-template-columns:96px 1fr;gap:6px 10px;align-items:center;padding:4px 0}
-.bgmh-set label{color:#7a7268;font-size:12px}
-.bgmh-set input[type=text]{width:100%;padding:3px 7px;border:1px solid #ddd7cf;border-radius:3px;font-size:12px}
-.bgmh-hint{grid-column:1/-1;color:#a49b90;font-size:11px;margin:-2px 0 4px}
+.bgmh-set label{color:var(--bgmh-muted);font-size:12px}
+.bgmh-hint{grid-column:1/-1;color:var(--bgmh-muted);font-size:11px;margin:-2px 0 4px}
+/* 表单控件：站点对 input 有自己的配色且带 html[data-theme] 前缀，
+   这里显式覆盖，保证 fg/bg 成对、深色下不会白底白字 */
+.bgmh-box input[type=text],.bgmh-box input[type=number],.bgmh-box textarea{background:var(--bgmh-in-bg)!important;color:var(--bgmh-in-fg)!important;border:1px solid var(--bgmh-in-border)!important;border-radius:3px;font-size:12px;padding:3px 7px}
+.bgmh-toolbar input[type=text]{flex:1;min-width:150px}
+.bgmh-set input[type=text],.bgmh-set input[type=number]{width:100%}
+.bgmh-box input[type=checkbox]{accent-color:var(--bgmh-accent);vertical-align:middle;width:auto}
 .bgmh-collapsed .bgmh-tabs,.bgmh-collapsed .bgmh-body{display:none}
 `;
 
@@ -1103,7 +1146,8 @@
       inp.type = 'number';
       inp.min = min;
       inp.value = SETTINGS[key];
-      inp.style.cssText = 'width:100%;padding:3px 7px;border:1px solid #ddd7cf;border-radius:3px;font-size:12px';
+      // 尺寸/配色全交给样式表（.bgmh-set input）——内联样式会压过主题变量，
+      // 之前这里写死 border 颜色，深色下就成了浅色描边。
       inp.onchange = () => {
         const v = Number(inp.value);
         if (Number.isFinite(v)) { SETTINGS[key] = v; saveSettings(); }
