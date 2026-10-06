@@ -7,17 +7,17 @@
 ## 安装
 
 1. 装扩展：[ScriptCat](https://chromewebstore.google.com/detail/scriptcat/ndcooeababalnlpkfedmmbbbgkljhpjf)（推荐，支持后台定时）或 [Tampermonkey](https://www.tampermonkey.net/)（兼容，无后台定时）
-2. 点下表 **安装** 徽章（或在 ScriptCat 中「新建脚本 → 从 URL 安装」粘贴 raw 链接）
+2. 点下表的 **版本徽章**（形如 `v2.0.2 install`）安装；也可在 ScriptCat 中「新建脚本 → 从 URL 安装」粘贴 raw 链接
 3. **先登录对应网站** —— 脚本依赖浏览器 Cookie 鉴权
 
 ## 脚本一览
 
 | 脚本 | 类型 | 作用 | 触发 | 安装 |
 | --- | --- | --- | --- | --- |
-| **Epic 免费游戏** | 后台定时 | 免费游戏自动加购物车 + 重复提醒，手动结算 | 每天 | [![安装](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/epic-freegame-claimer.user.js) |
-| **ModelScope 魔粒** | 后台定时 | 访问页面触发签到，领魔粒 | 每天 | [![安装](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/modelscope-magicube-checkin.user.js) |
-| **OtakuFans 签到** | 后台定时 + 页面授权 | 领 7 天登录奖励 | 每天 | [![授权](https://img.shields.io/badge/授权同步-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-auth.user.js) [![签到](https://img.shields.io/badge/每日签到-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-checkin.user.js) |
-| **Bangumi 番源** | 页面脚本 | 番剧页展示在线观看源 + BT 磁链 | 打开 bgm.tv | [![安装](https://img.shields.io/badge/ScriptCat-一键安装-9cf.svg)](https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/bgm-anime-source-helper.user.js) |
+| **Epic 免费游戏** | 后台定时 | 免费游戏自动加购物车 + 重复提醒，手动结算 | 每天 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/epic-freegame-claimer.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v2.0.2-install-9cf.svg" alt="v2.0.2 install"></a> |
+| **ModelScope 魔粒** | 后台定时 | 访问页面触发签到，领魔粒 | 每天 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/modelscope-magicube-checkin.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.1.0-install-9cf.svg" alt="v1.1.0 install"></a> |
+| **OtakuFans 签到** | 后台定时 + 页面授权 | 领 7 天登录奖励 | 每天 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-auth.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/%E6%8E%88%E6%9D%83_v1.0.0-install-9cf.svg" alt="授权 v1.0.0 install"></a> <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-checkin.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/%E7%AD%BE%E5%88%B0_v1.0.0-install-9cf.svg" alt="签到 v1.0.0 install"></a> |
+| **Bangumi 番源** | 页面脚本 | 番剧页展示在线观看源 + BT 磁链 | 打开 bgm.tv | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/bgm-anime-source-helper.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.0.1-install-9cf.svg" alt="v1.0.1 install"></a> |
 
 ## 通用：自定义执行时间
 
