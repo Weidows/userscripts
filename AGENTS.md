@@ -38,6 +38,21 @@ README「脚本一览」表的安装徽章文案**就是脚本版本号**，形�
 - 没发布到 GF 的脚本（后台定时类通常不上 GF —— GF/TM 跑不了 `@background`）**不要加**，别放空链接或占位图。
 - 两个徽章是两条独立安装入口：raw 徽章仍按上一条规则跟着 `@version` 手动同步，GF 徽章由 GF 自己喂版本。
 
+### GF 的「描述」怎么跟着 README 走
+
+GF 脚本页有两块文本，来源不同，别混：
+
+| 位置 | 来源 | 更新方式 |
+| --- | --- | --- |
+| 描述（脚本名下面那句） | 代码元信息块的 `@description` | 随**代码同步**自动更新（改脚本 → push） |
+| 附加信息（图片 / 表格 / 长文） | 仓库的 `docs/gf/<脚本名>.md` | 改 README → 重生成 md → GF 自动拉 |
+
+- 只改 README **不用升 `@version`**：GF 在代码没变时会为「附加信息」变化新建版本记录，且不要求版本号递增（`version_not_incremented?` 在 `code == 上一版 code` 时直接返回 false）。
+- 生成器 `node tools/gf-docs.mjs`（`--check` 只校验是否过期）：README 里 `### 标题 · \`脚本名\`` 的小节切成 `docs/gf/<脚本名>.md`，**相对图片路径自动改写成 raw 绝对地址** —— GF 只允许 `https` 的 `img src`，而且渲染基准是 md 所在目录、不是仓库根，直接放相对路径会 404。
+- 新脚本发到 GF 后两件事：① 在 `tools/gf-docs.mjs` 的 `GF_IDS` 里加 `脚本名 → GF id`；② 跑 `python tools/gf-bind-info-sync.py <GF id>` 绑定「附加信息同步 URL」（GF 无公开 API，只能走管理页 `sync_update` 表单；提交时**必须同时带上代码同步字段**，否则会被清空）。
+- `.github/workflows/gf-docs.yml` 在 README / `image/**` / 生成器变化时自动重生成并提交，忘记本地跑也不会让 GF 描述过期。
+- GF 的 automatic 同步是**周期性**的，不是 push 即触发；想立刻生效：`gf sync <id> --now`（回显「未发现更新」就是同步成功）。
+
 ## README 安装徽章的已知限制（实测，别再试了）
 
 - 徽章锚点写成 `<a href="..." target="_blank" rel="noopener">` 时，**github.com 会把 `target` 剥掉**、
