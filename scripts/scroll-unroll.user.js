@@ -2,8 +2,8 @@
 // @name         卷轴滚动
 // @name:zh-CN   卷轴滚动
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.1.0
-// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转），装裱轴 / 出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
+// @version      1.2.0
+// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
 // @author       Weidows
 // @license      MIT
 // @homepageURL  https://github.com/Weidows/userscripts
@@ -46,11 +46,6 @@ scroll:
     default: 1
     values: [0.6, 1, 1.4, 2]
 decor:
-  rods:
-    title: 上下装裱轴
-    description: 页首出现上轴杆、开卷后收起；接近卷尾下轴杆滑出
-    type: checkbox
-    default: true
   shadows:
     title: 出纸阴影
     description: 滚动前沿的暗边，强度随速度变化
@@ -100,7 +95,7 @@ site:
   if (window.__scrollUnrollLoaded) return;
   window.__scrollUnrollLoaded = true;
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const HOST_ID = 'scroll-unroll-layer';
   const PANEL_ID = 'scroll-unroll-panel';
   const PFX = 'su:'; // localStorage 镜像前缀（GM 存储不可用时兜底）
@@ -117,7 +112,6 @@ site:
     ['scroll.anchors', 'anchors', true, 'bool'],
     ['scroll.smoothTime', 'smoothTime', 0.34, 'num'],
     ['scroll.distScale', 'distScale', 1, 'num'],
-    ['decor.rods', 'ui.rods', true, 'bool'],
     ['decor.shadows', 'ui.shadows', true, 'bool'],
     ['decor.core', 'ui.core', true, 'bool'],
     ['decor.minimap', 'ui.minimap', true, 'bool'],
@@ -549,30 +543,8 @@ site:
   const CSS = `
 * { box-sizing: border-box; }
 .wrap { position: fixed; inset: 0; pointer-events: none; font: 12px/1.4 system-ui, sans-serif; }
-.rod, .edge, .core {
+.edge, .core {
   position: absolute; left: 0; right: 0; will-change: transform, opacity;
-}
-.rod {
-  height: 18px; opacity: 0; transform: translateY(-100%);
-  background: linear-gradient(180deg, #6b573c 0%, #3c3122 42%, #241d14 58%, #4a3c28 100%);
-  box-shadow: 0 1px 0 rgba(255, 235, 190, .22) inset, 0 -1px 0 rgba(0, 0, 0, .5) inset,
-    0 6px 18px rgba(0, 0, 0, .28);
-}
-.rod.top { top: 0; transform: translateY(-100%); }
-.rod.bottom { bottom: 0; transform: translateY(100%); }
-.rod::before, .rod::after {
-  content: ''; position: absolute; top: 50%; width: 26px; height: 26px; margin-top: -13px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 34% 28%, #ffeeb8 0%, #e0bd66 34%, #a8842f 68%, #5f4715 100%);
-  box-shadow: 0 2px 7px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .35);
-}
-.rod::before { left: 14px; }
-.rod::after { right: 14px; }
-.rod .sheen {
-  position: absolute; inset: 0; opacity: .55;
-  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0) 0 40px,
-    rgba(255, 245, 215, .16) 58px, rgba(255, 255, 255, 0) 76px);
-  background-position-x: var(--spin, 0px);
 }
 .edge { height: 54px; opacity: 0; }
 .edge.top { top: 0; background: linear-gradient(180deg, rgba(24, 18, 10, .55) 0%,
@@ -619,8 +591,6 @@ site:
   const MARKUP =
     '<div class="wrap">' +
     '<div class="edge top"></div><div class="edge bottom"></div>' +
-    '<div class="rod top"><div class="sheen"></div></div>' +
-    '<div class="rod bottom"><div class="sheen"></div></div>' +
     '<div class="coreWrap"><div class="core"></div><div class="coreHead"></div></div>' +
     '<div class="mm"><canvas></canvas><div class="mmvp"></div></div>' +
     '</div>';
@@ -647,14 +617,11 @@ site:
     lroot.appendChild(style);
     appendMarkup(lroot, MARKUP);
     const q = (sel) => lroot.querySelector(sel);
-    dom.top = q('.rod.top');
-    dom.bottom = q('.rod.bottom');
     dom.edgeTop = q('.edge.top');
     dom.edgeBottom = q('.edge.bottom');
     dom.coreWrap = q('.coreWrap');
     dom.core = q('.core');
     dom.coreHead = q('.coreHead');
-    dom.wrap = q('.wrap');
     dom.mm = q('.mm');
     dom.mmCanvas = q('.mm canvas');
     dom.mmVp = q('.mmvp');
@@ -662,12 +629,12 @@ site:
     buildMinimap();
   }
 
-  const dc = { y: null, v: 0, spin: 0, t: 0, raf: 0 };
+  const dc = { y: null, v: 0, t: 0, raf: 0 };
 
   function decorKick() {
     if (!anyDecorOn()) return;
     if (!lhost) buildLayer();
-    if (!dom.top || dc.raf) return;
+    if (!dom.edgeTop || dc.raf) return;
     dc.t = 0;
     dc.raf = requestAnimationFrame(decorTick);
   }
@@ -685,13 +652,12 @@ site:
     // 速度平滑：起步快、收手后慢（阴影自然淡出）
     const tau = Math.abs(inst) > Math.abs(dc.v) ? 0.04 : 0.13;
     dc.v += (inst - dc.v) * (1 - Math.exp(-dt / tau));
-    dc.spin += dc.v * dt * 0.7;
 
-    applyDecor(y, max, dc.v, dc.spin);
+    applyDecor(y, max, dc.v);
 
     if (Math.abs(dc.v) < 6) {
       dc.v = 0;
-      applyDecor(y, max, 0, dc.spin);
+      applyDecor(y, max, 0);
       dc.raf = 0;
       dc.t = 0;
       return;
@@ -699,23 +665,13 @@ site:
     dc.raf = requestAnimationFrame(decorTick);
   }
 
-  function applyDecor(y, max, v, spin) {
-    if (!dom.top) return;
+  function applyDecor(y, max, v) {
+    if (!dom.edgeTop) return;
     const ui = cfg.ui;
     const vh = window.innerHeight || 1;
     const k = clamp(Math.abs(v) / 2200, 0, 1);
     const down = v >= 0;
     const scrollable = max > vh * 0.4;
-    const topOpen = clamp(y / Math.max(1, vh * 0.5), 0, 1); // 顶部轴：卷起进度
-    const botClose = clamp((max - y) / Math.max(1, vh * 0.9), 0, 1); // 离卷尾还有多远
-
-    // 轴杆：开卷后顶部轴收起；接近卷尾时底部轴滑出
-    const show = scrollable && ui.rods ? 1 : 0;
-    dom.top.style.opacity = show * (1 - topOpen);
-    dom.top.style.transform = 'translateY(' + (-topOpen * 100 + k * 2) + '%)';
-    dom.bottom.style.opacity = show * (1 - botClose);
-    dom.bottom.style.transform = 'translateY(' + (botClose * 100 - k * 2) + '%)';
-    if (dom.wrap) dom.wrap.style.setProperty('--spin', (((spin % 240) + 240) % 240) + 'px');
 
     // 出纸阴影：滚动方向的前沿更重（像纸从轴下被卷出来）
     const nearTop = y > 4 ? 1 : 0.35;
@@ -1046,8 +1002,7 @@ site:
     {
       group: '装饰层',
       items: [
-        { path: 'ui.rods', label: '上下装裱轴', hint: '页首上轴、卷尾下轴', type: 'bool' },
-        { path: 'ui.shadows', label: '出纸阴影', hint: '滚动前沿的暗边', type: 'bool' },
+        { path: 'ui.shadows', label: '出纸阴影', hint: '滚动前沿的暗边，强度随速度变化', type: 'bool' },
         { path: 'ui.core', label: '卷芯进度条', hint: '缩略图开启时自动让位', type: 'bool' },
       ],
     },
@@ -1321,7 +1276,7 @@ site:
 
   function anyDecorOn() {
     const ui = cfg.ui;
-    return !!(ui.rods || ui.shadows || ui.core || ui.minimap);
+    return !!(ui.shadows || ui.core || ui.minimap);
   }
 
   // 配置变化后统一收口：滚动接管、装饰层显隐、缩略图刷新
@@ -1405,11 +1360,6 @@ site:
       setVal('ui.minimapInteractive', !cfg.ui.minimapInteractive);
       syncPanel();
       flash('缩略图交互：' + (cfg.ui.minimapInteractive ? '开' : '关'));
-    });
-    m('装饰 · 装裱轴：开 / 关', () => {
-      setVal('ui.rods', !cfg.ui.rods);
-      syncPanel();
-      flash('装裱轴：' + (cfg.ui.rods ? '开' : '关'));
     });
     m('装饰 · 出纸阴影：开 / 关', () => {
       setVal('ui.shadows', !cfg.ui.shadows);
@@ -1540,9 +1490,8 @@ site:
     layer: () => ({
       built: !!lhost,
       shadow: !!(lhost && lhost.shadowRoot),
-      topRod: dom.top ? dom.top.style.opacity : null,
-      bottomRod: dom.bottom ? dom.bottom.style.opacity : null,
-      edgeTop: dom.edgeTop ? dom.edgeTop.style.opacity : null,
+      shadowTop: dom.edgeTop ? dom.edgeTop.style.opacity : null,
+      shadowBottom: dom.edgeBottom ? dom.edgeBottom.style.opacity : null,
       coreHeight: dom.core ? dom.core.style.height : null,
     }),
     minimap: () => ({
