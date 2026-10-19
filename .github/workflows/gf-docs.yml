@@ -1,0 +1,41 @@
+name: gf-docs
+
+# README 是 GF 描述的唯一来源：push 后重生成 docs/gf/<脚本>.md，
+# GF 的「附加信息同步」会在下一次同步时把这份 md 拉过去。
+# 用 GITHUB_TOKEN 推的提交不会再触发 workflow，所以不会自激循环。
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'README.md'
+      - 'image/**'
+      - 'tools/gf-docs.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 由 README 重生成 GF 描述切片
+        run: node tools/gf-docs.mjs
+
+      - name: 有变化则提交
+        run: |
+          if git diff --quiet -- docs/gf; then
+            echo "docs/gf 已是最新，无需提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/gf
+          git commit -m "docs: 由 README 重新生成 GF 描述切片"
+          git push

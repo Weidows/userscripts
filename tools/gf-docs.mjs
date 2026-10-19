@@ -33,7 +33,7 @@ const GF_IDS = {
   'scroll-unroll': 601009,
 };
 
-const readme = readFileSync(README, 'utf8');
+const readme = readFileSync(README, 'utf8').replace(/\r\n/g, '\n');
 
 /** 把 README 里的相对引用改写成 raw 绝对地址，否则在 GF 上点不开 / 显示不出来。 */
 function absolutize(md) {
