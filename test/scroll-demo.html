@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>卷轴滚动 · 本地测试页</title>
+<style>
+  :root {
+    --paper: #f4ead6;
+    --paper-2: #eadfc6;
+    --ink: #2b241b;
+    --ink-2: #6b5c45;
+    --gold: #a8842f;
+    --wood: #3c3122;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: auto; } /* 开关类测试：改成 smooth 可对比「打架」效果 */
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #fffaf0 0%, rgba(255, 250, 240, 0) 60%),
+      repeating-linear-gradient(90deg, rgba(120, 96, 60, .035) 0 1px, rgba(0, 0, 0, 0) 1px 4px),
+      var(--paper);
+    font: 16px/1.85 "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "SimSun", Georgia, serif;
+  }
+  .paper { max-width: 760px; margin: 0 auto; padding: 12vh 28px 24vh; }
+  h1 { font-size: 34px; letter-spacing: .18em; margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 64px 0 14px; padding-left: 12px; border-left: 4px solid var(--gold); }
+  h3 { font-size: 17px; margin: 28px 0 8px; color: var(--ink-2); }
+  .lead { color: var(--ink-2); margin: 0 0 4px; }
+  .meta { font-size: 13px; color: var(--ink-2); letter-spacing: .04em; }
+  p { margin: 0 0 14px; text-indent: 2em; }
+  code, kbd {
+    font: 13px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+    background: var(--paper-2); border: 1px solid rgba(107, 92, 69, .25);
+    border-radius: 5px; padding: 1px 6px; text-indent: 0;
+  }
+  .nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 0; }
+  .nav a {
+    text-decoration: none; color: var(--ink); border: 1px solid rgba(107, 92, 69, .38);
+    border-radius: 999px; padding: 4px 13px; font-size: 14px; background: rgba(255, 252, 244, .7);
+  }
+  .box {
+    border: 1px solid rgba(107, 92, 69, .3); border-radius: 12px;
+    background: rgba(255, 252, 244, .72); padding: 16px 18px; margin: 18px 0;
+  }
+  .scroller {
+    height: 190px; overflow-y: auto; border: 1px dashed rgba(107, 92, 69, .5);
+    border-radius: 10px; padding: 10px 14px; background: rgba(255, 255, 255, .55);
+  }
+  textarea, input[type="text"] {
+    width: 100%; font: 14px/1.6 ui-monospace, Consolas, monospace;
+    border: 1px solid rgba(107, 92, 69, .4); border-radius: 8px; padding: 8px 10px;
+    background: #fffcF4; color: var(--ink);
+  }
+  ul { margin: 8px 0 0; padding-left: 1.3em; }
+  li { margin-bottom: 6px; }
+  pre {
+    background: rgba(60, 49, 34, .92); color: #f0e2c2; border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto;
+    font: 12.5px/1.7 ui-monospace, Consolas, monospace;
+  }
+  .art {
+    height: 150px; border-radius: 12px; margin: 20px 0;
+    background: linear-gradient(120deg, #d6c096, #8a7550 55%, #3c3122);
+    border: 1px solid rgba(60, 49, 34, .5);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255, 250, 235, .88); letter-spacing: .3em; font-size: 13px;
+  }
+  .art, pre, img { break-inside: avoid; }
+
+  /* 左下角测试面板：与装饰层互不干扰（z-index 比脚本层低） */
+  #panel {
+    position: fixed; left: 16px; bottom: 16px; z-index: 10; width: 268px;
+    background: rgba(28, 22, 14, .93); color: #f6e7c4; border: 1px solid rgba(224, 189, 102, .5);
+    border-radius: 12px; padding: 12px 14px; font: 13px/1.6 system-ui, sans-serif;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  }
+  #panel h4 { margin: 0 0 8px; font-size: 13px; letter-spacing: .08em; color: #ffd98a; }
+  #panel .row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  #panel button {
+    font: 12px system-ui, sans-serif; color: #f6e7c4; background: rgba(255, 240, 205, .09);
+    border: 1px solid rgba(224, 189, 102, .45); border-radius: 7px; padding: 4px 9px; cursor: pointer;
+  }
+  #panel button:hover { background: rgba(255, 240, 205, .2); }
+  #panel .kv { font: 12px/1.7 ui-monospace, Consolas, monospace; color: #d8c9a5; white-space: pre; }
+  #panel .hint { font-size: 12px; color: #b9a883; margin-top: 6px; }
+  #panel.min .body { display: none; }
+  #panel .hdr { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<main class="paper">
+  <h1>卷轴滚动</h1>
+  <p class="lead">本地测试页 —— 检查平滑「展卷」、轴杆动画与各种边界情况。</p>
+  <p class="meta">打开方式：直接双击本文件（<code>file://</code>），脚本以普通 <code>&lt;script&gt;</code> 加载，无需扩展。<br>
+  装了 ScriptCat / Tampermonkey 时，把 <code>scripts/scroll-unroll.user.js</code> 新建为脚本、<code>@match</code> 加一行 <code>file:///*</code> 也能测同一份代码。</p>
+
+  <nav class="nav">
+    <a href="#sandbox">跳到「边界情况」</a>
+    <a href="#ch2">跳到第二章</a>
+    <a href="#ch8">跳到第八章</a>
+    <a href="#end">跳到卷尾</a>
+  </nav>
+
+  <section>
+    <h2>第一章 · 手感</h2>
+    <p>滚轮推一下，页面应该「一次性滑到位」——先快后慢、稳稳停住，而不是一格一格地跳。连续快滚时不会重新起动画，也不会出现抖一下就卡住的感觉。</p>
+    <p>按住 <kbd>Alt</kbd> 再滚，立刻退回浏览器原生手感，用来做对照。按 <kbd>Alt</kbd>+<kbd>S</kbd> 整体开关，<kbd>Alt</kbd>+<kbd>D</kbd> 只开关装饰层。</p>
+    <p>键盘 <kbd>空格</kbd> / <kbd>PgDn</kbd> / <kbd>PgUp</kbd> / <kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Home</kbd> / <kbd>End</kbd> 也走同一套动画；在下面的输入框里打字时，这些键必须保持原生行为。</p>
+  </section>
+
+  <section id="sandbox">
+    <h2>第二章 · 边界情况</h2>
+
+    <h3>1) 内嵌滚动框：应当保持原生（不被接管）</h3>
+    <div class="box">
+      <div class="scroller">
+        <p>这个框自己滚动，把鼠标放进来滚滚看——它应该还是浏览器原生的、一格一格的手感，并且滚到头之后不会把外面的页面一起带着滚（除非滚到边界继续滚）。</p>
+        <p>填充行 2。这个框的高度固定、内容溢出，属于「正文里的小滚动容器」，脚本会主动跳过它。</p>
+        <p>填充行 3。跳过逻辑是从事件目标往上找最近的可滚动祖先，命中就交给浏览器。</p>
+        <p>填充行 4。滚动条拖动时，外层页面的动画状态应该不会被搅乱。</p>
+        <p>填充行 5。滚到底继续滚，外层页面随后接管（这是浏览器的滚动链行为）。</p>
+        <p>填充行 6。可以在这里反复上下滚，验证不会出现「页面跟着乱动」。</p>
+      </div>
+    </div>
+
+    <h3>2) 输入框：键盘接管必须让路</h3>
+    <div class="box">
+      <input type="text" placeholder="在这里按 ↑ ↓ 空格 PgDn，输入框自己应该正常响应">
+      <p style="margin:10px 0 6px">下面的文本框同理：</p>
+      <textarea rows="3" placeholder="多行输入，上下键应该在光标间移动"></textarea>
+    </div>
+
+    <h3>3) 横向滚动 / Ctrl+滚轮发的缩放：不被截胡</h3>
+    <p>按住 <kbd>Ctrl</kbd> 滚轮应照常缩放页面（脚本会直接放行）；横向滚轮（触控板左右滑）也放行。</p>
+  </section>
+
+  <div id="more"></div>
+
+  <section id="end">
+    <h2>卷尾 · 到达底部</h2>
+    <p>滑到这里时，下轴杆应该从屏幕下方滑进来「收卷」，上轴杆早已收起。再往上滚，上轴杆会在回到顶部时重新出现。</p>
+    <p>滚动过程中右侧会出现一根「卷芯」进度条，停下约一秒后淡出。</p>
+  </section>
+</main>
+
+<aside id="panel">
+  <div class="hdr">
+    <h4>测试面板</h4>
+    <button id="panelToggle" title="折叠 / 展开">－</button>
+  </div>
+  <div class="body">
+    <div class="row">
+      <button data-act="top">回到顶部</button>
+      <button data-act="end">到卷尾</button>
+      <button data-act="mid">到中点</button>
+    </div>
+    <div class="row">
+      <button data-act="toggle">平滑 开/关</button>
+      <button data-act="decor">装饰 开/关</button>
+      <button data-act="minimap">缩略图 开/关</button>
+    </div>
+    <div class="row">
+      <button data-act="smooth">顺滑度循环</button>
+      <button data-act="dist">距离循环</button>
+      <button data-act="panel">设置面板</button>
+    </div>
+    <div class="kv" id="readout">…</div>
+    <div class="hint">快捷键：Alt+S 平滑 · Alt+M 缩略图 · Alt+O 设置 · 按住 Alt 滚轮 = 原生</div>
+  </div>
+</aside>
+
+<!-- 被测脚本：本地以普通脚本加载（元信息块是注释，不影响） -->
+<script src="../scripts/scroll-unroll.user.js"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- 生成足够的填充内容（长页面才能试出滚动手感）----
+  var words = ['装裱', '绢本', '上引首', '拖尾', '天头', '地脚', '界画', '题跋', '藏书印', '蝴蝶装', '经折装', '包背装'];
+  var frags = [
+    '卷轴装是中国古籍与书画最常见的装帧形式：一张长纸或绢被反复卷起，阅读时从右往左徐徐展开。',
+    '卷起的一端叫「卷」，包裹在外侧的引首与拖尾承担保护与题跋的功能。',
+    '纸背与绢面的张力让卷子在收放之间保持平挺，这也是它比册页更适合长幅画面的原因。',
+    '每一次展卷，视线都要沿着一条横向的线索往右推进——这正是本页想模拟的节奏。',
+    '滚动条在这里扮演「卷轴轴心」的角色，位移速度的快慢直接决定阅读的呼吸感。'
+  ];
+  var more = document.getElementById('more');
+  var chapterNames = ['第三章 · 装帧', '第四章 · 材料', '第五章 · 收放', '第六章 · 题跋',
+    '第七章 · 掌眼', '第八章 · 长卷', '第九章 · 修复', '第十章 · 展陈',
+    '第十一章 · 传拓', '第十二章 · 摹写'];
+  var html = '';
+  for (var c = 0; c < chapterNames.length; c++) {
+    html += '<section id="ch' + (c + 3) + '"><h2>' + chapterNames[c] + '</h2>';
+    for (var p = 0; p < 4; p++) {
+      var t = '';
+      for (var s = 0; s < 4; s++) {
+        t += frags[(c + p + s) % frags.length];
+        if (s === 1) t += '（' + words[(c * 3 + p + s) % words.length] + '）';
+      }
+      html += '<p>' + t + '</p>';
+    }
+    // 图版 / 代码块 / 图片：让缩略图里有色块与等宽痕迹可看
+    if (c === 1) {
+      html += '<img alt="图版示意" style="width:100%;border-radius:12px" src="data:image/svg+xml;utf8,' +
+        encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="180"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e0bd66"/><stop offset="1" stop-color="#3c3122"/></linearGradient></defs><rect width="600" height="180" fill="url(#g)"/><text x="300" y="98" font-size="20" fill="rgba(255,250,235,.92)" text-anchor="middle" font-family="serif">IMG · 缩略图里应画成灰色块</text></svg>') + '">';
+    }
+    html += '<div class="art">图版 ' + (c + 1) + ' · 绢本设色</div>';
+    html += '<pre>// 缩略图配置示例\nscroll-unroll config ' + (c + 1) + '\n  minimapWidth: ' + (48 + c * 8) + '\n  rods / shadows / core: 可分别开关</pre>';
+    // 每两章插一个内嵌滚动框，方便反复验证「嵌套容器不被接管」
+    if (c % 2 === 1) {
+      html += '<div class="box"><h3>此处再放一个内嵌滚动框（应保持原生）</h3>' +
+        '<div class="scroller">' +
+        '<p>第 ' + (c + 1) + ' 号内嵌框：把鼠标放进来滚动，试试滚到边界继续滚的行为。</p>' +
+        '<p>填充。滚到底之后继续滚，外层页面才应该接手。</p>' +
+        '<p>填充。拖动内部滚动条时，外层不应出现抖动。</p>' +
+        '<p>填充。这里也是验证「事件目标判定」是否准确的地方。</p>' +
+        '</div></div>';
+    }
+    html += '</section>';
+  }
+  more.innerHTML = html;
+
+  // ---- 面板按钮 ----
+  var SU = window.__scrollUnroll;
+  var smoothSteps = [0.2, 0.34, 0.52, 0.8];
+  var distSteps = [0.6, 1, 1.4, 2];
+
+  function cycle(list, key) {
+    var i = list.indexOf(SU ? SU.cfg[key] : 0);
+    var v = list[(i + 1) % list.length];
+    if (SU) SU.setVal(key, v);
+    return v;
+  }
+
+  document.getElementById('panelToggle').addEventListener('click', function () {
+    var p = document.getElementById('panel');
+    p.classList.toggle('min');
+    this.textContent = p.classList.contains('min') ? '＋' : '－';
+  });
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+    if (!btn || !SU) return;
+    var act = btn.getAttribute('data-act');
+    if (act === 'top') SU.toTop();
+    else if (act === 'end') SU.toEnd();
+    else if (act === 'mid') SU.to(SU.state().max / 2);
+    else if (act === 'toggle') SU.setEnabled(!SU.cfg.enabled);
+    else if (act === 'decor') {
+      var on = !(SU.cfg.ui.rods || SU.cfg.ui.shadows || SU.cfg.ui.core || SU.cfg.ui.minimap);
+      SU.setVal('ui.rods', on);
+      SU.setVal('ui.shadows', on);
+      SU.setVal('ui.core', on);
+      SU.setVal('ui.minimap', on);
+      SU.flash('装饰层全套：' + (on ? '开 ✦' : '关'));
+    } else if (act === 'minimap') {
+      SU.setVal('ui.minimap', !SU.cfg.ui.minimap);
+      SU.flash('缩略图：' + (SU.cfg.ui.minimap ? '开 ✦' : '关'));
+    } else if (act === 'panel') SU.panel();
+    else if (act === 'smooth') SU.flash('顺滑度：' + cycle(smoothSteps, 'smoothTime') + 's');
+    else if (act === 'dist') SU.flash('滚动距离：' + cycle(distSteps, 'distScale') + '×');
+  });
+
+  // ---- 实时读数 ----
+  var out = document.getElementById('readout');
+  function tick() {
+    if (SU) {
+      var s = SU.state();
+      var l = SU.layer();
+      var m = SU.minimap();
+      out.textContent =
+        'y      ' + s.y.toFixed(1) + ' / ' + s.max.toFixed(0) + '\n' +
+        'target ' + s.target.toFixed(1) + '\n' +
+        'speed  ' + Math.round(s.v) + ' px/s\n' +
+        'tween  ' + (s.running ? 'running' : 'idle') + '  root=' + s.root + '\n' +
+        'decor  ' + (l.built ? 'on' : 'off') +
+        (l.built ? '  上轴 ' + l.topRod + '  下轴 ' + l.bottomRod : '') + '\n' +
+        'mm     ' + (m.display === 'none' ? 'off' : m.width + ' · 笔画 ' + m.painted +
+          ' · vp ' + m.vpTop + ' / ' + m.vpH);
+    } else {
+      out.textContent = 'window.__scrollUnroll 不存在：脚本没加载成功';
+    }
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>
