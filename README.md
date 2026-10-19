@@ -53,7 +53,7 @@
 
 ### Bangumi 番源 · `bgm-anime-source-helper`
 
-起因：Animeko 依赖第三方站解析，上游一变就失效；本脚本改为只依赖社区维护的番剧站点映射 + 各站 RSS。
+![1792420690219](image/README/1792420690219.png)
 
 - 在线观看：拉 [`bangumi-data`](https://github.com/bangumi-data/bangumi-data)（正是 Animeko 番源的同一套上游数据）建 `bangumi_id → 各站 id` 索引；URL 模板以数据自带的 `siteMeta` 为准，**站点改 URL 无需改脚本**
 - B站分集直达：`media_id` →（`pgc/review/user`）`season_id` →（`pgc/view/web/season`）逐集 `ep` id，直出 `.../bangumi/play/ep{id}`
