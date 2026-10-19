@@ -24,6 +24,20 @@ README「脚本一览」表的安装徽章文案**就是脚本版本号**，形�
 - 两个脚本版本号相同时（如 OtakuFans 的授权 / 签到都是 `1.0.0`），徽章文案要带角色词区分：`授权_v1.0.0-install`、`签到_v1.0.0-install`。
 - 自检：把 README 里每个徽章的版本号与对应 `scripts/*.user.js` 的 `@version` 对一遍，应全部一致。
 
+### Greasy Fork 徽章（只有发到 GF 的脚本才有）
+
+脚本发布到 Greasy Fork 后，在「脚本一览」的安装列、raw 徽章之后追加一个 **GF 徽章**：
+
+```html
+<a href="https://greasyfork.org/zh-CN/scripts/<id>" target="_blank" rel="noopener"><img src="https://img.shields.io/greasyfork/v/<id>?label=GF" alt="Greasy Fork"></a>
+```
+
+- 用 shields 的 **`greasyfork/v/<id>` 动态徽章**（渲染成 `GF | v1.2.0`），版本实时取自 GF —— **不要**写静态 `badge/v{版本}-install`，否则等于多一处要手改的版本号，迟早漂。
+- `<id>` 用 `gf list --json` 查（含 id / name / version / codeUrl），不要靠猜名字或搜索。
+- 加徽章前先核对 GF 上那份代码与仓库一致：`gf cat <id>` 去掉注入的 `@downloadURL` / `@updateURL` 行后与 `scripts/<file>` diff，不一致就先 `gf publish` 更新。
+- 没发布到 GF 的脚本（后台定时类通常不上 GF —— GF/TM 跑不了 `@background`）**不要加**，别放空链接或占位图。
+- 两个徽章是两条独立安装入口：raw 徽章仍按上一条规则跟着 `@version` 手动同步，GF 徽章由 GF 自己喂版本。
+
 ## README 安装徽章的已知限制（实测，别再试了）
 
 - 徽章锚点写成 `<a href="..." target="_blank" rel="noopener">` 时，**github.com 会把 `target` 剥掉**、
