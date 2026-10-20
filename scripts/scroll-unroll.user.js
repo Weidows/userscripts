@@ -2,8 +2,8 @@
 // @name         卷轴滚动
 // @name:zh-CN   卷轴滚动
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.3.0
-// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、长按右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
+// @version      1.4.0
+// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、双击右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
 // @author       Weidows
 // @license      MIT
 // @homepageURL  https://github.com/Weidows/userscripts
@@ -81,14 +81,14 @@ decor:
     default: 0.32
     min: 0.1
     max: 1
-  minimapLongPress:
-    title: 长按右键暂时隐藏缩略图
-    description: 在缩略图上按住鼠标右键约 0.5 秒即可收起，到时自动回来
+  minimapDoubleClick:
+    title: 双击右键暂时隐藏缩略图
+    description: 在缩略图上连按两下鼠标右键即可收起，到时自动回来；该区域内右键不弹系统菜单
     type: checkbox
     default: true
   minimapHideSeconds:
     title: 缩略图隐藏时长
-    description: 长按右键收起后多久自动恢复（秒）
+    description: 双击右键收起后多久自动恢复（秒）
     type: number
     default: 20
     min: 5
@@ -108,7 +108,7 @@ site:
   if (window.__scrollUnrollLoaded) return;
   window.__scrollUnrollLoaded = true;
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const HOST_ID = 'scroll-unroll-layer';
   const PANEL_ID = 'scroll-unroll-panel';
   const PFX = 'su:'; // localStorage 镜像前缀（GM 存储不可用时兜底）
@@ -131,7 +131,7 @@ site:
     ['decor.minimapInteractive', 'ui.minimapInteractive', true, 'bool'],
     ['decor.minimapWidth', 'ui.minimapWidth', 88, 'num'],
     ['decor.minimapOpacity', 'ui.minimapOpacity', 0.32, 'num'],
-    ['decor.minimapLongPress', 'ui.minimapLongPress', true, 'bool'],
+    ['decor.minimapDoubleClick', 'ui.minimapDoubleClick', true, 'bool'],
     ['decor.minimapHideSeconds', 'ui.minimapHideSeconds', 20, 'num'],
     ['site.blacklist', 'siteOff', [], 'lines'],
     ['internal.seen', 'seen', false, 'bool'], // 不进 @UserConfig：不在扩展面板露出
@@ -715,12 +715,12 @@ site:
   // ==========================================================================
   const mm = {
     scale: 1, total: 1, painted: 0, dragging: false, timer: 0, lastRender: 0, ctx: null,
-    hiddenUntil: 0, restoreTimer: 0, // 长按右键临时隐藏用
+    hiddenUntil: 0, restoreTimer: 0, // 双击右键临时隐藏用
   };
   const MM_SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|HEAD|META|LINK|TITLE|OPTION)$/;
   const MM_BOX = /^(IMG|VIDEO|CANVAS|IFRAME|HR)$/;
 
-  // 长按右键临时隐藏：缩略图挡住右侧内容时，按住右键约 0.5 秒收起，到时自动回来。
+  // 双击右键临时隐藏：缩略图挡住右侧内容时，连按两下右键收起，到时自动回来。
   // 状态走时间戳而不是只靠 setTimeout —— 后台标签页的定时器会被节流，时间戳不会骗人。
   function mmSuspended() {
     return performance.now() < mm.hiddenUntil;
@@ -747,10 +747,13 @@ site:
     );
   }
 
-  // ---- 长按右键手势：只认「落在缩略图上」的右键按住，普通右键照常弹菜单 ----
-  const mmPress = { x: 0, y: 0, armed: false, fired: false, timer: 0 };
-  const MM_LONG_PRESS_MS = 500;
-  const MM_PRESS_SLOP = 8;
+  // ---- 双击右键：缩略图范围内连按两下右键 → 暂隐。
+  // Windows 上 contextmenu 是右键「松开」时才弹的，不抑制它的话第一次右键就弹出系统菜单，
+  // 第二次点击落在菜单上 —— 双击根本不可能成立。所以这个范围内（我们自己的 UI）右键一律不
+  // 走系统菜单，换取可靠的双击识别；手势关掉 / 缩略图隐藏时恢复原样。
+  const mmPress = { t: 0, x: 0, y: 0, armed: false };
+  const MM_DBL_MS = 400;
+  const MM_DBL_SLOP = 10;
 
   function inMinimap(x, y) {
     if (!dom.mm || dom.mm.style.display === 'none') return false;
@@ -759,48 +762,34 @@ site:
   }
 
   function onMmPress(e) {
-    if (e.button !== 2 || !cfg.ui.minimapLongPress) return;
+    if (e.button !== 2 || !cfg.ui.minimapDoubleClick) return;
     if (mmSuspended() || !mmUsable() || !inMinimap(e.clientX, e.clientY)) return;
+    const now = performance.now();
+    const dbl =
+      mmPress.armed &&
+      now - mmPress.t <= MM_DBL_MS &&
+      Math.abs(e.clientX - mmPress.x) <= MM_DBL_SLOP &&
+      Math.abs(e.clientY - mmPress.y) <= MM_DBL_SLOP;
+    if (dbl) {
+      mmPress.armed = false;
+      mmHideTemporarily(cfg.ui.minimapHideSeconds);
+      flash(
+        '缩略图已收起 ' + clamp(Number(cfg.ui.minimapHideSeconds) || 20, 3, 600) + 's（到时自动回来）'
+      );
+      return;
+    }
+    mmPress.armed = true;
+    mmPress.t = now;
     mmPress.x = e.clientX;
     mmPress.y = e.clientY;
-    mmPress.armed = true;
-    mmPress.fired = false;
-    clearTimeout(mmPress.timer);
-    mmPress.timer = setTimeout(() => {
-      if (!mmPress.armed) return;
-      mmPress.fired = true;
-      mmHideTemporarily(cfg.ui.minimapHideSeconds);
-      flash('缩略图已收起 ' + clamp(Number(cfg.ui.minimapHideSeconds) || 20, 3, 600) + 's（到时自动回来）');
-    }, MM_LONG_PRESS_MS);
-  }
-
-  function onMmRelease(e) {
-    if (e.type !== 'pointercancel' && e.button !== 2) return;
-    mmPress.armed = false;
-    clearTimeout(mmPress.timer);
-  }
-
-  function onMmMove(e) {
-    if (!mmPress.armed) return;
-    // 按住后明显移动 = 不是长按意图（比如想拖选右边的东西），取消
-    if (Math.abs(e.clientX - mmPress.x) > MM_PRESS_SLOP || Math.abs(e.clientY - mmPress.y) > MM_PRESS_SLOP) {
-      mmPress.armed = false;
-      clearTimeout(mmPress.timer);
-    }
   }
 
   function onMmContext(e) {
-    if (mmPress.fired) {
-      // 长按已经生效：吞掉这次右键菜单，免得它盖在刚收起的缩略图位置上
-      mmPress.fired = false;
-      mmPress.armed = false;
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    // 普通右键：菜单照常弹，但取消还挂着的长按计时
-    mmPress.armed = false;
-    clearTimeout(mmPress.timer);
+    if (!cfg.ui.minimapDoubleClick) return;
+    if (mmSuspended() || !mmUsable() || !inMinimap(e.clientX, e.clientY)) return;
+    // 自己的 UI 区域，右键菜单一律不走系统；把手势关掉就能恢复
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   function buildMinimap() {
@@ -1105,7 +1094,7 @@ site:
         { path: 'ui.minimapInteractive', label: '可点击 / 拖动跳转', hint: '关掉则纯展示、不遮挡右侧点选', type: 'bool' },
         { path: 'ui.minimapWidth', label: '宽度', hint: '', type: 'range', min: 48, max: 200, step: 4, unit: 'px' },
         { path: 'ui.minimapOpacity', label: '静息不透明度', hint: '鼠标移上去变 1', type: 'range', min: 0.1, max: 1, step: 0.02 },
-        { path: 'ui.minimapLongPress', label: '长按右键暂时隐藏', hint: '在缩略图上按住右键约 0.5 秒', type: 'bool' },
+        { path: 'ui.minimapDoubleClick', label: '双击右键暂时隐藏', hint: '在缩略图上连按两下右键（该区域不弹系统菜单）', type: 'bool' },
         { path: 'ui.minimapHideSeconds', label: '隐藏时长', hint: '到时自动恢复', type: 'range', min: 5, max: 120, step: 5, unit: 's' },
       ],
     },
@@ -1455,10 +1444,10 @@ site:
       syncPanel();
       flash('缩略图交互：' + (cfg.ui.minimapInteractive ? '开' : '关'));
     });
-    m('缩略图 · 长按右键暂隐：开 / 关', () => {
-      setVal('ui.minimapLongPress', !cfg.ui.minimapLongPress);
+    m('缩略图 · 双击右键暂隐：开 / 关', () => {
+      setVal('ui.minimapDoubleClick', !cfg.ui.minimapDoubleClick);
       syncPanel();
-      flash('长按右键暂隐：' + (cfg.ui.minimapLongPress ? '开' : '关'));
+      flash('双击右键暂隐：' + (cfg.ui.minimapDoubleClick ? '开' : '关'));
     });
     m('装饰 · 出纸阴影：开 / 关', () => {
       setVal('ui.shadows', !cfg.ui.shadows);
@@ -1536,12 +1525,9 @@ site:
   window.addEventListener('scroll', onScroll, { passive: true, capture: true });
   window.addEventListener('keydown', onHotkey, { passive: false, capture: true });
   window.addEventListener('keydown', onPanelKey, { passive: false, capture: true });
-  // 长按右键暂隐缩略图。capture 是为了先于缩略图自己的 pointerdown 拿到事件，
+  // 双击右键暂隐缩略图。capture 是为了先于缩略图自己的 pointerdown 拿到事件，
   // 并且缩略图关掉交互（pointer-events:none）时也能收到 —— 那时点不中它，但手势仍该可用。
   window.addEventListener('pointerdown', onMmPress, { passive: true, capture: true });
-  window.addEventListener('pointerup', onMmRelease, { passive: true, capture: true });
-  window.addEventListener('pointercancel', onMmRelease, { passive: true, capture: true });
-  window.addEventListener('pointermove', onMmMove, { passive: true, capture: true });
   window.addEventListener('contextmenu', onMmContext, { passive: false, capture: true });
   window.addEventListener(
     'resize',
@@ -1614,7 +1600,7 @@ site:
       suspended: mmSuspended(),
       hiddenLeftMs: Math.max(0, Math.round(mm.hiddenUntil - performance.now())),
     }),
-    // 长按右键效果的手动入口（测试页 / 控制台用）
+    // 双击右键效果的手动入口（测试页 / 控制台用）
     hideMinimap: (sec) => mmHideTemporarily(sec),
   };
 })();
