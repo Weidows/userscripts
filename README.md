@@ -18,7 +18,7 @@
 | **ModelScope 魔粒** | 后台定时 | 访问页面触发签到，领魔粒 | 每天 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/modelscope-magicube-checkin.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.1.0-install-9cf.svg" alt="v1.1.0 install"></a> |
 | **OtakuFans 签到** | 后台定时 + 页面授权 | 领 7 天登录奖励 | 每天 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-auth.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/%E6%8E%88%E6%9D%83_v1.0.0-install-9cf.svg" alt="授权 v1.0.0 install"></a> <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/otakufans-rewards-checkin.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/%E7%AD%BE%E5%88%B0_v1.0.0-install-9cf.svg" alt="签到 v1.0.0 install"></a> |
 | **Bangumi 番源** | 页面脚本 | 番剧页展示在线观看源 + BT 磁链 | 打开 bgm.tv | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/bgm-anime-source-helper.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.0.1-install-9cf.svg" alt="v1.0.1 install"></a> <a href="https://greasyfork.org/zh-CN/scripts/599220" target="_blank" rel="noopener"><img src="https://img.shields.io/greasyfork/v/599220?label=GF" alt="Greasy Fork"></a> |
-| **卷轴滚动** | 页面脚本 | 滚轮 / 键盘 / 锚点改走临界阻尼动画平滑「展卷」+ VSCode 风格缩略图 | 任意网页 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/scroll-unroll.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.4.0-install-9cf.svg" alt="v1.4.0 install"></a> <a href="https://greasyfork.org/zh-CN/scripts/601009" target="_blank" rel="noopener"><img src="https://img.shields.io/greasyfork/v/601009?label=GF" alt="Greasy Fork"></a> |
+| **卷轴滚动** | 页面脚本 | 滚轮 / 键盘 / 锚点改走临界阻尼动画平滑「展卷」+ VSCode 风格缩略图 | 任意网页 | <a href="https://raw.githubusercontent.com/Weidows/userscripts/master/scripts/scroll-unroll.user.js" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/v1.4.1-install-9cf.svg" alt="v1.4.1 install"></a> <a href="https://greasyfork.org/zh-CN/scripts/601009" target="_blank" rel="noopener"><img src="https://img.shields.io/greasyfork/v/601009?label=GF" alt="Greasy Fork"></a> |
 
 ## 通用：自定义执行时间
 
@@ -69,9 +69,10 @@
 - 缩略图（VSCode 风格，可开关）：右栏按比例重绘页面骨架（背景色块 + 图片占位 + 真实文字行盒），视口指示器跟着滚动走；可点击 / 拖动跳转（1:1 跟手）；静息半透明、悬停变实；窄屏（<720px）自动隐藏；开着缩略图时卷芯进度自动让位
 - 缩略图挡事时：在它上面**双击鼠标右键**收起，默认 20 秒后自动回来（时长与手势都能关，见设置面板）。注意：这块区域是我们自己的 UI，右键**不弹系统菜单**（否则第一次右键就弹菜单、双击永远凑不成）—— 想用系统菜单就先 `Alt+M` 收掉缩略图或把手势关掉
 - 配置：**ScriptCat** 走脚本元信息里的 `@UserConfig`（扩展控制面板出现「配置」按钮）；**Tampermonkey / Violentmonkey** 用脚本菜单「⚙ 设置面板（Alt+O）」或页面内设置面板。两边读写同一批存储键（`scroll.*` / `decor.*` / `site.blacklist`），不会各说各话
-- 主动放行：正文里的内嵌滚动框、按住 `Ctrl`（缩放）/ `Alt`（临时原生）、横向滚动、输入框内的翻页键；`body{overflow:hidden}` + 主容器滚动的 SPA 布局会自动改用那个容器
+- 主动放行：正文里的内嵌滚动框、按住 `Ctrl`（缩放）/ `Alt`（临时原生）、横向滚动、输入框 / 编辑器内的翻页键；`body{overflow:hidden}` + 主容器滚动的 SPA 布局会自动改用那个容器
+- Shadow DOM 感知：事件穿过影子边界时 `e.target` 会被重定向成宿主自定义元素，只看它会误判 —— 判断「是否在打字」、找内层滚动框、找锚点链接一律走 `composedPath`，所以 `<my-input>` 这类组件里的输入框、组件内部的自定义滚动框、组件里的 `#锚点` 链接都能正确分辨（`closed` 模式的 shadow root 对外部隐藏内部节点，那种情况无解）
 - 快捷键：`Alt+S` 平滑开关 / `Alt+M` 缩略图 / `Alt+O` 设置面板；缩略图上**双击右键**暂时收起 20s；脚本菜单里另有各子功能单独开关、顺滑度（0.20–0.80s）、距离倍率（0.6–2×）、本页黑名单、重置
-- 自测：双击 `test/scroll-demo.html`（脚本以普通 `<script>` 加载，不需要扩展；左下角面板有实时读数与缩略图开关）
+- 自测：双击 `test/scroll-demo.html`（脚本以普通 `<script>` 加载，不需要扩展；左下角面板有实时读数与缩略图开关）。键盘守卫/Shadow DOM 回归用 `test/input-guard.html`，同一个文件加 `?mode=native` 就是「不载脚本」的原生对照组，两边跑同一批按键对比
 
 ## 验证
 

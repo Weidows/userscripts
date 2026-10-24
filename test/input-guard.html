@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>输入框键盘守卫 · 回归测试</title>
+<style>
+  :root { --ink: #2b241b; --paper: #f4ead6; --gold: #a8842f; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink); background: var(--paper);
+    font: 15px/1.8 "Noto Serif CJK SC", "Songti SC", SimSun, Georgia, serif;
+  }
+  .paper { max-width: 720px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: .1em; }
+  h2 { font-size: 16px; margin: 34px 0 10px; padding-left: 10px; border-left: 4px solid var(--gold); }
+  p { margin: 0 0 12px; }
+  code { font: 13px ui-monospace, Consolas, monospace; background: #eadfc6; padding: 1px 5px; border-radius: 4px; }
+  input, textarea, .ce {
+    width: 100%; font: 14px/1.7 ui-monospace, Consolas, monospace;
+    padding: 8px 10px; border: 1px solid #c3b391; border-radius: 6px; background: #fffdf7; color: var(--ink);
+  }
+  textarea { resize: vertical; }
+  .ce { min-height: 64px; }
+  .hint { font-size: 13px; color: #6b5c45; margin: 4px 0 0; }
+  .filler p { text-indent: 2em; margin-bottom: 14px; }
+  #readout {
+    position: fixed; left: 12px; bottom: 12px; z-index: 9999;
+    background: rgba(28, 22, 14, .9); color: #f4ead6; border-radius: 8px;
+    padding: 8px 12px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="paper">
+  <h1>输入框键盘守卫 · 回归测试</h1>
+  <p>载入脚本：<code>input-guard.html</code>　｜　对照组（不载脚本、纯浏览器原生）：<code>input-guard.html?mode=native</code></p>
+  <p class="hint">每组用例的判定：焦点在下面这些可编辑元素里时按 空格 / PageUp / PageDown / ↑ / ↓，
+  <strong>页面不应滚动</strong>，且按键应被该元素自己消费（输入框吃到字符 / 光标移动）。</p>
+
+  <h2>1 · 单行输入框 <code>#t-input</code></h2>
+  <input id="t-input" type="text" placeholder="在这里按 空格 / PgDn / ↑ / ↓">
+
+  <h2>2 · 多行输入框 <code>#t-area</code></h2>
+  <textarea id="t-area" rows="3" placeholder="多行输入，↑↓ 应移动光标"></textarea>
+
+  <h2>3 · contenteditable <code>#t-ce</code></h2>
+  <div id="t-ce" class="ce" contenteditable="true">可编辑块，空格应插入空格，↑↓ 应在行间移动光标</div>
+
+  <h2>4 · Shadow DOM 内的 input <code>#t-shadow-input</code></h2>
+  <shadow-input id="t-shadow-input"></shadow-input>
+  <p class="hint">自定义元素的内部输入框：事件 target 会被重定向成宿主，靠 <code>e.target</code> 判断可编辑性会漏。</p>
+
+  <h2>5 · Shadow DOM 内的 contenteditable <code>#t-shadow-ce</code></h2>
+  <shadow-ce id="t-shadow-ce"></shadow-ce>
+
+  <h2>6 · 嵌套 Shadow DOM 内的 input <code>#t-shadow-nested</code></h2>
+  <shadow-outer id="t-shadow-nested"></shadow-outer>
+
+  <h2>7 · 隐藏 textarea 伪装的编辑器（CodeMirror 类）<code>#t-fake-editor</code></h2>
+  <div id="t-fake-editor" style="position:relative">
+    <textarea aria-hidden="true" style="position:absolute;inset:0;opacity:0;height:100%"></textarea>
+    <div class="ce" style="pointer-events:none">假编辑器：真焦点在一个透明 textarea 上</div>
+  </div>
+
+  <h2>8 · Shadow DOM 内的滚动框 <code>#t-inner-scroller</code></h2>
+  <shadow-scroller id="t-inner-scroller"></shadow-scroller>
+  <p class="hint">鼠标滚轮停在这个内层滚动框里时，应该滚它自己，页面不动（原生手感）。</p>
+
+  <h2>9 · Shadow DOM 内的锚点链接 <code>#t-shadow-link</code></h2>
+  <shadow-link id="t-shadow-link"></shadow-link>
+  <p class="hint">点它应触发卷轴动画跳到「contenteditable」那节 —— 链接在 shadow root 里，靠 <code>e.target</code> 找不到。</p>
+
+  <h2>撑高用的正文</h2>
+  <div class="filler" id="filler"></div>
+</div>
+
+<div id="readout">就绪（未载脚本对照模式用 #off）</div>
+
+<script>
+  // ---- 撑高页面，保证有可滚动空间 ----
+  var filler = document.getElementById('filler');
+  var buf = [];
+  for (var i = 1; i <= 60; i++) {
+    buf.push('<p>第 ' + i + ' 段。卷轴展卷测试用的填充正文，只为把页面撑到足够高，好判断按键是否误触发了整页滚动。</p>');
+  }
+  filler.innerHTML = buf.join('');
+
+  // ---- Shadow DOM 用例 ----
+  function defineShadow(tag, inner) {
+    if (customElements.get(tag)) return;
+    customElements.define(tag, class extends HTMLElement {
+      connectedCallback() {
+        if (this.shadowRoot) return;
+        var r = this.attachShadow({ mode: 'open' });
+        r.innerHTML = '<style>input,.ce{width:100%;font:14px/1.7 ui-monospace,Consolas,monospace;padding:8px 10px;border:1px solid #c3b391;border-radius:6px;background:#fffdf7}textarea{width:100%;resize:vertical;padding:8px 10px;border:1px solid #c3b391;border-radius:6px;background:#fffdf7}.ce{min-height:56px}</style>' + inner;
+      }
+    });
+  }
+  defineShadow('shadow-input', '<input type="text" placeholder="Shadow DOM 里的 input">');
+  defineShadow('shadow-ce', '<div class="ce" contenteditable="true">Shadow DOM 里的 contenteditable</div>');
+  defineShadow('shadow-inner', '<textarea rows="3" placeholder="嵌套 shadow 里的 textarea"></textarea>');
+
+  // 8 · shadow 内部的自定义滚动框（外层的卡片不滚，只有里面那层滚）
+  defineShadow('shadow-scroller',
+    '<style>.box{height:240px;overflow:auto;border:1px solid #c3b391;border-radius:6px;background:#fffdf7;padding:8px 10px}'
+    + '.box p{margin:0 0 10px}</style>'
+    + '<div class="box">' + Array.from({ length: 30 }, (_, i) => '<p>内层滚动内容 ' + (i + 1) + '</p>').join('') + '</div>');
+
+  // 9 · shadow 内部的锚点链接
+  defineShadow('shadow-link', '<a href="#t-ce" style="display:inline-block;padding:6px 12px;border:1px solid #a8842f;border-radius:6px">跳到 contenteditable 那节</a>');
+
+  if (!customElements.get('shadow-outer')) {
+    customElements.define('shadow-outer', class extends HTMLElement {
+      connectedCallback() {
+        if (this.shadowRoot) return;
+        var r = this.attachShadow({ mode: 'open' });
+        r.innerHTML = '<shadow-inner></shadow-inner>';
+      }
+    });
+  }
+
+  // ---- 把被测元素滚到视口中间（用 scrollTop 直写，绕开被接管的 window.scrollTo）----
+  // 必须让焦点元素留在视口里：Chrome 在收到按键时会把「已滚出视口的焦点元素」拉回来，
+  // 那是浏览器行为，会把「按键是否引发滚动」的判定带偏。
+  window.__center = function (sel) {
+    var el = document.querySelector(sel);
+    if (!el) return 'no-el';
+    var leaf = window.__resolveLeaf(el);
+    if (!leaf) return 'no-leaf';
+    var se = document.scrollingElement || document.documentElement;
+    var r = leaf.getBoundingClientRect();
+    var target = window.scrollY + r.top - (window.innerHeight - r.height) / 2;
+    se.scrollTop = Math.max(0, Math.round(target));
+    var r2 = leaf.getBoundingClientRect();
+    return JSON.stringify({
+      y: Math.round(window.scrollY),
+      tag: leaf.tagName,
+      inView: r2.top >= 0 && r2.bottom <= window.innerHeight + 1
+    });
+  };
+
+  // ---- 找到元素真正接收键盘事件的叶子节点（钻 shadow root）----
+  window.__resolveLeaf = function (el) {
+    if (!el) return null;
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return el;
+    var node = el, guard = 0;
+    while (node && node.shadowRoot && guard++ < 8) {
+      node = node.shadowRoot;
+      var inner = node.querySelector('input,textarea,[contenteditable="true"]');
+      if (inner) return inner;
+      var next = node.querySelector('*');
+      if (!next) break;
+      node = next;
+    }
+    return el.querySelector('input,textarea,[contenteditable="true"]') || el;
+  };
+
+  // ---- 聚焦 + 居中，一步到位 ----
+  window.__focusCase = function (sel) {
+    var el = document.querySelector(sel);
+    if (!el) return 'no-el';
+    var leaf = window.__resolveLeaf(el);
+    if (!leaf) return 'no-leaf';
+    leaf.focus({ preventScroll: true });
+    var info = JSON.parse(window.__center(sel));
+    info.mode = window.__mode;
+    info.hasScript = typeof window.__scrollUnroll !== 'undefined';
+    return JSON.stringify(info);
+  };
+
+  // ---- 深查 / 取矩形（滚轮与锚点用例要用 shadow 内部元素的位置）----
+  window.__deepQuery = function (hostSel, innerSel) {
+    var host = document.querySelector(hostSel);
+    if (!host) return null;
+    var node = host, guard = 0;
+    while (node && node.shadowRoot && guard++ < 8) {
+      var hit = node.shadowRoot.querySelector(innerSel);
+      if (hit) return hit;
+      node = node.shadowRoot.querySelector('*');
+    }
+    return null;
+  };
+  window.__rectOf = function (hostSel, innerSel) {
+    var el = innerSel ? window.__deepQuery(hostSel, innerSel) : document.querySelector(hostSel);
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left + r.width / 2),
+      y: Math.round(r.top + r.height / 2),
+      top: Math.round(r.top),
+      h: Math.round(r.height)
+    };
+  };
+  window.__innerScrollTop = function (hostSel, innerSel) {
+    var el = innerSel ? window.__deepQuery(hostSel, innerSel) : document.querySelector(hostSel);
+    return el ? Math.round(el.scrollTop) : null;
+  };
+
+  // ---- 滚轮探针（同样挂冒泡阶段，读到的才是脚本处理后的 defaultPrevented）----
+  window.__wheellog = [];
+  window.addEventListener('wheel', function (e) {
+    window.__wheellog.push({ prevented: e.defaultPrevented, dy: Math.round(e.deltaY) });
+  }, false);
+
+  // ---- 采样滚动过程：区分「原生瞬跳」与「引擎动画」----
+  window.__samples = [];
+  window.__watchScroll = function (ms) {
+    window.__samples = [];
+    var t0 = performance.now();
+    var tick = function () {
+      var t = performance.now() - t0;
+      window.__samples.push([Math.round(t), Math.round(window.scrollY)]);
+      if (t < ms) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return 'watching';
+  };
+
+  // ---- 记录 keydown 是否被吞：必须挂在「冒泡」阶段 ----
+  // 被测脚本是 window 上的 capture 监听，挂在它前面（capture 更早或先注册）读到的一定是 false。
+  // 冒泡阶段的 window 监听发生在它之后，这时 defaultPrevented 才是真值。
+  window.__keylog = [];
+  window.addEventListener('keydown', function (e) {
+    var first = e.composedPath && e.composedPath()[0];
+    window.__keylog.push({
+      key: e.key,
+      tag: e.target && e.target.tagName,
+      inner: first && first.tagName,
+      prevented: e.defaultPrevented
+    });
+  }, false);
+
+  // ---- 定位 / 空闲判定（脚本接管了 window.scrollTo，测试里不能再用它）----
+  window.__pos = function (y) {
+    var se = document.scrollingElement || document.documentElement;
+    se.scrollTop = y;
+    return Math.round(window.scrollY);
+  };
+  window.__idle = function () {
+    var s = window.__scrollUnroll && window.__scrollUnroll.state ? window.__scrollUnroll.state() : null;
+    return { running: s ? s.running : false, y: Math.round(window.scrollY) };
+  };
+
+  // ---- 是否载入被测脚本（?mode=native = 对照组）----
+  // 注意：用 hash（#off）只能做「同文档导航」，页面不会重载，上一份脚本还活着 —— 对照就假了。
+  // 必须用 query 强制整页重新加载。
+  window.__mode = /(^|[?&])mode=native(&|$)/.test(location.search) ? 'native' : 'userscript';
+  if (window.__mode === 'userscript') {
+    var s = document.createElement('script');
+    s.src = '../scripts/scroll-unroll.user.js';
+    s.onerror = function () { document.getElementById('readout').textContent = '脚本加载失败'; };
+    document.head.appendChild(s);
+  }
+  document.getElementById('readout').textContent =
+    '模式：' + (window.__mode === 'native' ? '对照（无脚本）' : '已载入脚本') + '\n' + (location.search || '(无)');
+</script>
+</body>
+</html>

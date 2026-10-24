@@ -2,7 +2,7 @@
 // @name         卷轴滚动
 // @name:zh-CN   卷轴滚动
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.4.0
+// @version      1.4.1
 // @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、双击右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
 // @author       Weidows
 // @license      MIT
@@ -108,7 +108,7 @@ site:
   if (window.__scrollUnrollLoaded) return;
   window.__scrollUnrollLoaded = true;
 
-  const VERSION = '1.4.0';
+  const VERSION = '1.4.1';
   const HOST_ID = 'scroll-unroll-layer';
   const PANEL_ID = 'scroll-unroll-panel';
   const PFX = 'su:'; // localStorage 镜像前缀（GM 存储不可用时兜底）
@@ -278,24 +278,62 @@ site:
 
   const winRoot = () => document.scrollingElement || document.documentElement;
 
-  // 从事件目标往上找「整屏滚动的那个容器」，找不到就用窗口
+  // ---- 事件真实落点 / 祖先链 ----
+  // Shadow DOM 会把 e.target 重定向成宿主自定义元素，parentElement 走到宿主也就断了；
+  // 要和页面里「真实的元素」打交道只能沿 composedPath 走，它给出跨 Shadow 边界的完整链。
+  // （closed 模式的 shadow root 对外部监听器依然隐藏内部节点，那种情况无解。）
+  function chainOf(e) {
+    const out = [];
+    if (e && e.composedPath) {
+      const path = e.composedPath();
+      for (let i = 0; i < path.length; i++) {
+        const n = path[i];
+        if (n === window || n === document) break;
+        if (n && n.nodeType === 1) out.push(n);
+      }
+    }
+    if (!out.length) {
+      let el = e && e.target;
+      while (el && el.nodeType === 1 && el !== document.documentElement) {
+        out.push(el);
+        el = el.parentElement;
+      }
+    }
+    return out;
+  }
+
+  // 元素或链 → 链（往下走的函数统一收这个，省得两套逻辑）
+  function asChain(from) {
+    if (!from) return [];
+    if (Array.isArray(from)) return from;
+    const out = [];
+    let el = from.nodeType === 1 ? from : null;
+    while (el && el !== document.documentElement) {
+      out.push(el);
+      el = el.parentElement;
+    }
+    return out;
+  }
+
+  // 找「整屏滚动的那个容器」，找不到就用窗口
   function pickRoot(from) {
     const se = winRoot();
     if (maxOf(se) > 4) return se;
-    let el = from;
-    while (el && el.nodeType === 1 && el !== se) {
-      if (scrollableY(el) && el.clientHeight >= window.innerHeight * 0.65) return el;
-      el = el.parentElement;
+    const chain = asChain(from);
+    for (let i = 0; i < chain.length; i++) {
+      const el = chain[i];
+      if (el !== se && scrollableY(el) && el.clientHeight >= window.innerHeight * 0.65) return el;
     }
     return se;
   }
 
-  // 事件目标所在的小滚动容器（正文里的滚动框），命中则交还浏览器原生处理
+  // 落在小滚动容器（正文里的滚动框）里，命中则交还浏览器原生处理
   function nestedScroller(from, root) {
-    let el = from;
-    while (el && el.nodeType === 1 && el !== root && el !== document.documentElement) {
+    const chain = asChain(from);
+    for (let i = 0; i < chain.length; i++) {
+      const el = chain[i];
+      if (el === root || el === document.documentElement) continue;
       if (scrollableY(el)) return el;
-      el = el.parentElement;
     }
     return null;
   }
@@ -406,10 +444,11 @@ site:
     if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // 横向滚动别管
     if (inOurScroller(e)) return; // 设置面板自己的滚动
 
-    const root = pickRoot(e.target);
+    const chain = chainOf(e); // 跨 Shadow 边界：组件内部的自定义滚动容器也认得出来
+    const root = pickRoot(chain);
     const max = maxOf(root);
     if (max <= 1) return;
-    if (nestedScroller(e.target, root)) return; // 正文内小滚动框：保留原生手感
+    if (nestedScroller(chain, root)) return; // 正文内小滚动框：保留原生手感
 
     const vh = window.innerHeight;
     const dy = clamp(wheelDelta(e) * cfg.distScale, -vh * 1.2, vh * 1.2);
@@ -432,16 +471,47 @@ site:
   // ==========================================================================
   const EDITABLE = /^(INPUT|TEXTAREA|SELECT|OPTION)$/;
 
-  function isEditing(node) {
+  function isEditingNode(node) {
     if (!node || node.nodeType !== 1) return false;
-    if (node.isContentEditable) return true;
-    return EDITABLE.test(node.tagName);
+    return node.isContentEditable || EDITABLE.test(node.tagName);
+  }
+
+  // 最内层的活动元素：Shadow DOM 里 document.activeElement 拿到的是宿主，
+  // 得用 shadowRoot.activeElement 一层层钻进去才是真正持有焦点的那个输入框。
+  function deepActive() {
+    let a = document.activeElement;
+    let guard = 0;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement && guard++ < 10) {
+      a = a.shadowRoot.activeElement;
+    }
+    return a;
+  }
+
+  // 是否正在可编辑元素里打字。**必须看 composedPath，不能只看 e.target**：
+  // 事件穿过 Shadow DOM 时 target 会被重定向成宿主自定义元素（<my-input> 包着 <input>），
+  // 它既不是 INPUT 也 isContentEditable=false —— 于是输入框里的空格 / 翻页键
+  // 会被我们当成「页面滚动」吃掉，这就是「在输入框按空格也滚」的根因。
+  // isEditing(null) = 不回看事件，只查当前焦点。
+  function isEditing(e) {
+    if (e) {
+      const path = e.composedPath ? e.composedPath() : null;
+      if (path) {
+        for (let i = 0; i < path.length; i++) {
+          const n = path[i];
+          if (n === document || n === window) break;
+          if (isEditingNode(n)) return true;
+        }
+        return false;
+      }
+      return isEditingNode(e.target);
+    }
+    return isEditingNode(deepActive());
   }
 
   function onKey(e) {
     if (!cfg.keys || !cfg.enabled || e.defaultPrevented) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (isEditing(e.target) || isEditing(document.activeElement)) return;
+    if (isEditing(e) || isEditing()) return;
     const el = curRoot();
     const vh = window.innerHeight;
     const k = cfg.distScale;
@@ -481,8 +551,16 @@ site:
     if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
     const el = curRoot();
     if (maxOf(el) <= 4) return;
-    let a = e.target;
-    while (a && a.nodeType === 1 && a.tagName !== 'A') a = a.parentElement;
+    // 沿 composedPath 找 <a>：链接在 Shadow DOM 里时 e.target 只是宿主自定义元素，
+    // 用 parentElement 往上走也进不去那层 shadow root
+    const chain = chainOf(e);
+    let a = null;
+    for (let i = 0; i < chain.length; i++) {
+      if (chain[i].tagName === 'A') {
+        a = chain[i];
+        break;
+      }
+    }
     if (!a || !a.getAttribute) return;
     const href = a.getAttribute('href') || '';
     if (href.charAt(0) !== '#' || href.length < 2) return;
