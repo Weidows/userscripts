@@ -2,7 +2,7 @@
 // @name         卷轴滚动
 // @name:zh-CN   卷轴滚动
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.4.1
+// @version      1.4.2
 // @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、双击右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
 // @author       Weidows
 // @license      MIT
@@ -108,7 +108,7 @@ site:
   if (window.__scrollUnrollLoaded) return;
   window.__scrollUnrollLoaded = true;
 
-  const VERSION = '1.4.1';
+  const VERSION = '1.4.2';
   const HOST_ID = 'scroll-unroll-layer';
   const PANEL_ID = 'scroll-unroll-panel';
   const PFX = 'su:'; // localStorage 镜像前缀（GM 存储不可用时兜底）
@@ -278,6 +278,44 @@ site:
 
   const winRoot = () => document.scrollingElement || document.documentElement;
 
+  // ---- 文档高度缓存 ----
+  // maxOf() 读 scrollHeight 会**强制同步布局**：DOM 一旦变动（懒加载、实时更新），浏览器就得
+  // 把待处理的样式/布局立刻结算。以前 curRoot() 每帧、每个 scroll 事件都调一次 maxOf，
+  // 在 GitHub feed 这类持续变动的页面上就是每帧一次强制布局 —— 实测 Layout 1359 次 vs 原生 24 次，
+  // CPU 一慢就变成肉眼可见的一顿一顿。
+  // 现在改成「有缓存就复用」：只在尺寸真变了（resize / 观察到的变动）才重新读一次。
+  const dim = { max: -1, at: 0, root: null, stale: false };
+  const MAX_REFRESH_MS = 250; // 缓存最多每 250ms 真读一次 scrollHeight
+
+  function refreshMax(el) {
+    dim.max = maxOf(el);
+    dim.at = performance.now();
+    dim.root = el;
+    dim.stale = false;
+    return dim.max;
+  }
+
+  // 不触发同步布局的版本：同一 root 上复用缓存。
+  // DOM 变了只「标脏」（零成本），真到要用的时候才按 MAX_REFRESH_MS 限频重算 ——
+  // 这样 feed 类页面持续变动时，最多 4 次/秒强制布局，而不是 60 次/秒。
+  function maxCached(el) {
+    if (dim.max < 0 || dim.root !== el) return refreshMax(el);
+    if (dim.stale && performance.now() - dim.at > MAX_REFRESH_MS) return refreshMax(el);
+    return dim.max;
+  }
+
+  // 标脏（便宜，不读布局）：resize / DOM 变动 / 站点改了布局后调用
+  function invalidateMax() {
+    dim.stale = true;
+  }
+
+  // 立即作废（resize 这种必须马上重算的场景）
+  function dropMax() {
+    dim.max = -1;
+    dim.root = null;
+    dim.stale = false;
+  }
+
   // ---- 事件真实落点 / 祖先链 ----
   // Shadow DOM 会把 e.target 重定向成宿主自定义元素，parentElement 走到宿主也就断了；
   // 要和页面里「真实的元素」打交道只能沿 composedPath 走，它给出跨 Shadow 边界的完整链。
@@ -344,7 +382,9 @@ site:
   const st = { root: null, target: 0, cur: 0, v: 0, raf: 0, last: 0, selfY: -1 };
 
   function curRoot() {
-    if (st.root && st.root.isConnected && maxOf(st.root) > 1) return st.root;
+    // 这里用 maxCached 而不是 maxOf：这是每帧/每滚动事件都会走的热路径，
+    // 读 scrollHeight 会强制同步布局（详见 dim 注释）
+    if (st.root && st.root.isConnected && maxCached(st.root) > 1) return st.root;
     st.root = winRoot();
     return st.root;
   }
@@ -362,7 +402,7 @@ site:
     st.v = (st.v - omega * temp) * expo;
     let out = st.target + (change + temp) * expo;
 
-    const max = maxOf(el);
+    const max = maxCached(el); // 每帧热路径，别读 scrollHeight（强制布局）
     st.target = clamp(st.target, 0, max);
     if (out > max) out = max;
     if (out < 0) out = 0;
@@ -462,6 +502,12 @@ site:
       st.v = 0;
     }
     st.target = clamp(st.target + dy, 0, max);
+    // 卡在两端还继续滚 → 页面可能在无限加载（feed 类），缓存的高度已过期，
+    // 立刻重算一次，否则会「滚到底就滚不动了」
+    if (st.target === max || st.target === 0) {
+      if (dy > 0 && st.target === max) refreshMax(root);
+      else if (dy < 0 && st.target === 0) refreshMax(root);
+    }
     kick();
     decorKick();
   }
@@ -735,7 +781,7 @@ site:
   function decorTick(t) {
     const el = curRoot();
     const y = readY(el);
-    const max = maxOf(el);
+    const max = maxCached(el); // 同上：每帧热路径
     const dt = clamp(dc.t ? (t - dc.t) / 1000 : 1 / 60, 1 / 240, 0.1);
     dc.t = t;
 
@@ -758,6 +804,11 @@ site:
     dc.raf = requestAnimationFrame(decorTick);
   }
 
+  // 每帧写样式的去重表：值没变就不写。
+  // 写入会标脏样式，紧接着 updateMinimapVp 读 clientHeight 就会强制同步布局 ——
+  // 每帧都无脑写 = 每帧一次强制布局，这是「一顿一顿」的第二个来源。
+  const dec = { eTop: -1, eBot: -1, hTop: '', hBot: '', core: -1, pct: '', head: -1, headTop: '' };
+
   function applyDecor(y, max, v) {
     if (!dom.edgeTop) return;
     const ui = cfg.ui;
@@ -769,21 +820,49 @@ site:
     // 出纸阴影：滚动方向的前沿更重（像纸从轴下被卷出来）
     const nearTop = y > 4 ? 1 : 0.35;
     const nearBot = max - y > 4 ? 1 : 0.35;
-    const eTop = scrollable && ui.shadows ? k * (down ? 1 : 0.45) * nearTop : 0;
-    const eBot = scrollable && ui.shadows ? k * (down ? 0.45 : 1) * nearBot : 0;
-    dom.edgeTop.style.opacity = eTop;
-    dom.edgeBottom.style.opacity = eBot;
-    dom.edgeTop.style.height = 30 + 44 * eTop + 'px';
-    dom.edgeBottom.style.height = 30 + 44 * eBot + 'px';
+    const eTop = +(scrollable && ui.shadows ? k * (down ? 1 : 0.45) * nearTop : 0).toFixed(3);
+    const eBot = +(scrollable && ui.shadows ? k * (down ? 0.45 : 1) * nearBot : 0).toFixed(3);
+    if (eTop !== dec.eTop) {
+      dom.edgeTop.style.opacity = eTop;
+      dec.eTop = eTop;
+    }
+    if (eBot !== dec.eBot) {
+      dom.edgeBottom.style.opacity = eBot;
+      dec.eBot = eBot;
+    }
+    const hTop = (30 + 44 * eTop).toFixed(1) + 'px';
+    const hBot = (30 + 44 * eBot).toFixed(1) + 'px';
+    if (hTop !== dec.hTop) {
+      dom.edgeTop.style.height = hTop;
+      dec.hTop = hTop;
+    }
+    if (hBot !== dec.hBot) {
+      dom.edgeBottom.style.height = hBot;
+      dec.hBot = hBot;
+    }
 
     // 卷芯进度：滚动时浮现、停下淡出；缩略图开着就让位（信息重复）
     const mmOn = !!(ui.minimap && dom.mm && dom.mm.style.display !== 'none');
-    const showCore = scrollable && ui.core && !mmOn ? clamp(k * 2.2, 0, 1) : 0;
+    const showCore = +(scrollable && ui.core && !mmOn ? clamp(k * 2.2, 0, 1) : 0).toFixed(3);
     const pct = max > 0 ? clamp(y / max, 0, 1) : 0;
-    dom.coreWrap.style.opacity = showCore;
-    dom.core.style.height = (pct * 100).toFixed(2) + '%';
-    dom.coreHead.style.opacity = showCore * clamp(k * 1.6, 0, 1);
-    dom.coreHead.style.top = (pct * 100).toFixed(2) + '%';
+    if (showCore !== dec.core) {
+      dom.coreWrap.style.opacity = showCore;
+      dec.core = showCore;
+    }
+    const pctStr = (pct * 100).toFixed(2) + '%';
+    if (pctStr !== dec.pct) {
+      dom.core.style.height = pctStr;
+      dec.pct = pctStr;
+    }
+    const headOp = +(showCore * clamp(k * 1.6, 0, 1)).toFixed(3);
+    if (headOp !== dec.head) {
+      dom.coreHead.style.opacity = headOp;
+      dec.head = headOp;
+    }
+    if (pctStr !== dec.headTop) {
+      dom.coreHead.style.top = pctStr;
+      dec.headTop = pctStr;
+    }
 
     updateMinimapVp(y);
   }
@@ -805,7 +884,8 @@ site:
   }
 
   function mmHideTemporarily(sec) {
-    const s = clamp(Number(sec) || 20, 3, 600);
+    // 下限 5s 与 @UserConfig / 面板的 min 保持一致：设成 0 或极短会让缩略图看起来「坏了」
+    const s = clamp(Number(sec) || 20, 5, 600);
     mm.hiddenUntil = performance.now() + s * 1000;
     clearTimeout(mm.restoreTimer);
     applyMinimap();
@@ -821,7 +901,7 @@ site:
       !!dom.mm &&
       !mmSuspended() &&
       window.innerWidth >= 720 &&
-      maxOf(curRoot()) > window.innerHeight * 0.5
+      maxCached(curRoot()) > window.innerHeight * 0.5
     );
   }
 
@@ -852,7 +932,7 @@ site:
       mmPress.armed = false;
       mmHideTemporarily(cfg.ui.minimapHideSeconds);
       flash(
-        '缩略图已收起 ' + clamp(Number(cfg.ui.minimapHideSeconds) || 20, 3, 600) + 's（到时自动回来）'
+        '缩略图已收起 ' + clamp(Number(cfg.ui.minimapHideSeconds) || 20, 5, 600) + 's（到时自动回来）'
       );
       return;
     }
@@ -938,16 +1018,34 @@ site:
     }, d);
   }
 
+  // 缩略图的尺度参数：同样别每帧读 scrollHeight / clientHeight（强制布局）。
+  // 这些值只在渲染缩略图（本来就是重活，节流到 ~1.2s）和 resize 时更新。
+  // h 也要缓存 —— applyDecor 先写样式再读 dom.mm.clientHeight 会是「每帧一次强制布局」。
+  const mmDim = { total: 0, vh: 0, h: 0 };
+
+  function refreshMmDim() {
+    const root = curRoot();
+    mmDim.total = Math.max(1, root.scrollHeight);
+    mmDim.vh = root.clientHeight || window.innerHeight;
+    mmDim.h = dom.mm ? dom.mm.clientHeight || window.innerHeight : window.innerHeight;
+  }
+
   function updateMinimapVp(y) {
     if (!dom.mm || dom.mm.style.display === 'none') return;
-    const root = curRoot();
-    const total = Math.max(1, root.scrollHeight);
-    const vh = root.clientHeight || window.innerHeight;
-    const h = dom.mm.clientHeight || window.innerHeight;
-    const sp = h / total;
-    dom.mmVp.style.top = (y * sp).toFixed(2) + 'px';
-    dom.mmVp.style.height = Math.max(6, vh * sp).toFixed(2) + 'px';
+    if (!mmDim.total || !mmDim.h) refreshMmDim();
+    const sp = mmDim.h / mmDim.total;
+    const top = (y * sp).toFixed(1) + 'px';
+    const hgt = Math.max(6, mmDim.vh * sp).toFixed(1) + 'px';
+    if (top !== mmVpLast.top) {
+      dom.mmVp.style.top = top;
+      mmVpLast.top = top;
+    }
+    if (hgt !== mmVpLast.height) {
+      dom.mmVp.style.height = hgt;
+      mmVpLast.height = hgt;
+    }
   }
+  const mmVpLast = { top: '', height: '' };
 
   function renderMinimap() {
     if (!dom.mm || !mm.ctx) return;
@@ -959,6 +1057,12 @@ site:
     const walkRoot = isWinScroll(root) ? document.body : root;
     if (!walkRoot) return;
     const total = Math.max(1, root.scrollHeight);
+    // 这里本来就要读 scrollHeight（重绘缩略图），顺手把热路径的缓存校准，
+    // 免得 maxCached / updateMinimapVp 用着过期的高度
+    dim.max = Math.max(0, root.scrollHeight - root.clientHeight);
+    dim.root = root;
+    mmDim.total = total;
+    mmDim.vh = root.clientHeight || window.innerHeight;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const w = clamp(Math.round(cfg.ui.minimapWidth), 48, 200);
@@ -1087,9 +1191,11 @@ site:
   }
 
   // DOM 变了 → 重新描一遍（节流，且我们自己写在 html 上的层不在 body 里，不会自激）
+  // 同时作废文档高度缓存：feed 类页面会不断插入内容，缓存的高度迟早过期。
   function watchMinimap() {
     if (mm.obs || !document.body || typeof MutationObserver !== 'function') return;
     mm.obs = new MutationObserver(() => {
+      invalidateMax();
       if (cfg.ui.minimap) scheduleMinimap(700);
     });
     mm.obs.observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -1611,6 +1717,8 @@ site:
     'resize',
     () => {
       dc.y = null;
+      dropMax(); // 视口变了，缓存的文档高度必须立刻重算
+      mmDim.total = 0;
       decorKick();
       scheduleMinimap(200);
     },

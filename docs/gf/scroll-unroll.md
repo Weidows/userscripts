@@ -6,4 +6,5 @@
 - 主动放行：正文里的内嵌滚动框、按住 `Ctrl`（缩放）/ `Alt`（临时原生）、横向滚动、输入框 / 编辑器内的翻页键；`body{overflow:hidden}` + 主容器滚动的 SPA 布局会自动改用那个容器
 - Shadow DOM 感知：事件穿过影子边界时 `e.target` 会被重定向成宿主自定义元素，只看它会误判 —— 判断「是否在打字」、找内层滚动框、找锚点链接一律走 `composedPath`，所以 `<my-input>` 这类组件里的输入框、组件内部的自定义滚动框、组件里的 `#锚点` 链接都能正确分辨（`closed` 模式的 shadow root 对外部隐藏内部节点，那种情况无解）
 - 快捷键：`Alt+S` 平滑开关 / `Alt+M` 缩略图 / `Alt+O` 设置面板；缩略图上**双击右键**暂时收起 20s；脚本菜单里另有各子功能单独开关、顺滑度（0.20–0.80s）、距离倍率（0.6–2×）、本页黑名单、重置
-- 自测：双击 `test/scroll-demo.html`（脚本以普通 `<script>` 加载，不需要扩展；左下角面板有实时读数与缩略图开关）。键盘守卫/Shadow DOM 回归用 `test/input-guard.html`，同一个文件加 `?mode=native` 就是「不载脚本」的原生对照组，两边跑同一批按键对比
+- 性能：热路径（每帧 / 每个滚动事件）**不读 `scrollHeight` / `clientHeight` / `getBoundingClientRect`** —— 读这些会强制同步布局。文档高度走缓存（DOM 变动只标脏，最多 4 次/秒真读一次），缩略图尺度参数与每帧样式写入都做了去重。实测在「持续变动的重页面 + CPU 降速」下 Layout 次数从 1359 降到 36（原生 28），卡顿时长中位数 3736ms → 98ms（原生噪声基线 80ms）
+- 自测：双击 `test/scroll-demo.html`（脚本以普通 `<script>` 加载，不需要扩展；左下角面板有实时读数与缩略图开关）。键盘守卫/Shadow DOM 回归用 `test/input-guard.html`，同一个文件加 `?mode=native` 就是「不载脚本」的原生对照组，两边跑同一批按键对比；滚动抖动压测用 `test/heavy-feed.html`（仿 feed：DOM 持续变动 + 懒加载插入 + 粘性顶栏）

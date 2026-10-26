@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>仿 GitHub feed · 抖动复现页</title>
+<style>
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --bg: #fff; --accent: #0969da; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--fg); background: var(--bg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  /* 粘性顶栏 —— GitHub 也有，滚动时每帧都要重新合成 */
+  header.top {
+    position: sticky; top: 0; z-index: 50;
+    height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 20px;
+    background: rgba(255,255,255,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  header.top b { font-size: 15px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px 20px 40vh; }
+  .card {
+    border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 0 0 12px;
+    background: #fff;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 14px; color: var(--accent); }
+  .card p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+  .card .meta { font-size: 12px; color: var(--muted); display: flex; gap: 12px; }
+  .card .thumb { height: 34px; width: 34px; border-radius: 50%; background: #eaeef2; float: left; margin-right: 12px; }
+  .skeleton { height: 84px; border: 1px dashed var(--line); border-radius: 8px; margin-bottom: 12px; }
+  #readout {
+    position: fixed; right: 12px; bottom: 12px; z-index: 99;
+    background: rgba(28,22,14,.92); color: #f4ead6; border-radius: 8px; padding: 8px 12px;
+    font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <b>Feed（仿）</b>
+  <span style="color:var(--muted);font-size:13px">复现「滚动一顿一顿」：DOM 持续变动 + 懒加载插入 + 粘性顶栏</span>
+</header>
+
+<div class="wrap" id="feed"></div>
+<div id="readout">…</div>
+
+<script>
+  var feed = document.getElementById('feed');
+  var seq = 0;
+
+  function makeCard(i) {
+    var el = document.createElement('article');
+    el.className = 'card';
+    el.innerHTML =
+      '<div class="thumb"></div>' +
+      '<h3>事件 ' + i + ' · 某个仓库的提交</h3>' +
+      '<p>这是仿 GitHub feed 的卡片正文，用来把页面撑高。它会在滚动过程中被不断插入和改写，' +
+      '模拟真实 feed 的懒加载与实时更新。</p>' +
+      '<div class="meta"><span>@user' + i + '</span><span>' + (i % 24) + ' 小时前</span><span>★ ' + (i * 7 % 300) + '</span></div>';
+    return el;
+  }
+
+  // 1) 初始铺满 —— 和真实 feed 一样有几百个节点
+  var buf = document.createDocumentFragment();
+  for (var i = 0; i < 120; i++) buf.appendChild(makeCard(++seq));
+  feed.appendChild(buf);
+
+  // 2) 懒加载：滚到接近底部就插入新卡片（GitHub feed 的无限滚动）
+  var inserting = false;
+  window.addEventListener('scroll', function () {
+    if (inserting) return;
+    var near = (document.documentElement.scrollHeight - window.scrollY - window.innerHeight);
+    if (near < 900) {
+      inserting = true;
+      setTimeout(function () {
+        var frag = document.createDocumentFragment();
+        for (var k = 0; k < 20; k++) frag.appendChild(makeCard(++seq));
+        feed.appendChild(frag);
+        inserting = false;
+      }, 30);
+    }
+  }, { passive: true });
+
+  // 3) 实时更新：定时改写已有卡片（真实 feed 有「新事件」滚动插入）
+  setInterval(function () {
+    var cards = feed.children;
+    if (!cards.length) return;
+    // 每隔一会儿在**顶部**插入一条 —— 这会触发 Chrome 的 scroll anchoring
+    var c = makeCard(++seq);
+    feed.insertBefore(c, feed.firstChild);
+    // 同时改写几处文本，制造 style/layout 失效
+    for (var j = 0; j < 3; j++) {
+      var t = cards[Math.floor(Math.random() * cards.length)];
+      if (t && t.querySelector('.meta')) {
+        t.querySelector('.meta').firstElementChild.textContent = '@u' + (++seq);
+      }
+    }
+  }, 700);
+
+  var ro = document.getElementById('readout');
+  setInterval(function () {
+    ro.textContent =
+      'y=' + Math.round(window.scrollY) +
+      '  高=' + document.documentElement.scrollHeight +
+      '  卡片=' + feed.children.length +
+      '  节点=' + document.getElementsByTagName('*').length;
+  }, 200);
+</script>
+</body>
+</html>
