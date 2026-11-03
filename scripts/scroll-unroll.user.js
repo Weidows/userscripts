@@ -2,8 +2,8 @@
 // @name         卷轴滚动
 // @name:zh-CN   卷轴滚动
 // @namespace    https://github.com/Weidows/userscripts
-// @version      1.4.2
-// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、双击右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；所有子功能都能在脚本管理器配置面板里调。
+// @version      1.5.0
+// @description  让网页像卷轴一样平滑展开：接管滚轮 / 键盘 / 锚点，用临界阻尼动画匀速「展卷」；右侧 VSCode 风格缩略图（可点击拖动跳转、双击右键暂隐 20s），出纸阴影 / 卷芯进度可分别开关；看视频时空格自动让给播放器（暂停 / 播放），所有子功能都能在脚本管理器配置面板里调。
 // @author       Weidows
 // @license      MIT
 // @homepageURL  https://github.com/Weidows/userscripts
@@ -26,6 +26,11 @@ scroll:
   keys:
     title: 接管键盘翻页键
     description: 空格 / PageUp / PageDown / 方向键 / Home / End 走展卷动画；输入框内一律放行
+    type: checkbox
+    default: true
+  videoSpace:
+    title: 看视频时空格归播放器
+    description: 页面上有在看的视频时，空格 = 暂停 / 播放，不再翻页（Shift+空格 仍可上翻）
     type: checkbox
     default: true
   anchors:
@@ -108,7 +113,7 @@ site:
   if (window.__scrollUnrollLoaded) return;
   window.__scrollUnrollLoaded = true;
 
-  const VERSION = '1.4.2';
+  const VERSION = '1.5.0';
   const HOST_ID = 'scroll-unroll-layer';
   const PANEL_ID = 'scroll-unroll-panel';
   const PFX = 'su:'; // localStorage 镜像前缀（GM 存储不可用时兜底）
@@ -122,6 +127,7 @@ site:
   const SPEC = [
     ['scroll.enabled', 'enabled', true, 'bool'],
     ['scroll.keys', 'keys', true, 'bool'],
+    ['scroll.videoSpace', 'videoSpace', true, 'bool'],
     ['scroll.anchors', 'anchors', true, 'bool'],
     ['scroll.smoothTime', 'smoothTime', 0.34, 'num'],
     ['scroll.distScale', 'distScale', 1, 'num'],
@@ -554,6 +560,110 @@ site:
     return isEditingNode(deepActive());
   }
 
+  // ---- 视频语境：判断「空格该归播放器」 ------------------------------------
+  // 三种情况都要接住：
+  //   1. 按键落在 <video>/<audio> 上（原生控件、播放器把焦点放在 video 上）
+  //   2. 播放器把焦点放在外层 div 上，但事件路径穿过 video（B 站 / YouTube 的自定义控件）
+  //   3. 谁都没焦点 —— 原生空格只会滚页面，可用户明明在看那块视频
+  // 判定「在看」的尺子：视口内可见面积 ≥ 20% 视口、且不是静音循环无控件的装饰视频。
+  const MEDIA_TAG = /^(VIDEO|AUDIO)$/;
+
+  function isMediaNode(n) {
+    return !!n && n.nodeType === 1 && MEDIA_TAG.test(n.tagName);
+  }
+
+  function mediaInPath(e) {
+    const path = e && e.composedPath ? e.composedPath() : null;
+    if (!path) return isMediaNode(e && e.target) ? e.target : null;
+    for (let i = 0; i < path.length; i++) {
+      const n = path[i];
+      if (n === document || n === window) break;
+      if (isMediaNode(n)) return n;
+    }
+    return null;
+  }
+
+  // <video> 可能藏在 shadow root 里（组件化播放器），所以要连影子树一起收，但限深限量
+  function collectVideos(root, out, depth) {
+    if (!root || !root.querySelectorAll || depth > 3 || out.length > 24) return;
+    const direct = root.querySelectorAll('video');
+    for (let i = 0; i < direct.length; i++) out.push(direct[i]);
+    const all = root.querySelectorAll('*');
+    for (let i = 0; i < all.length && i < 4000; i++) {
+      if (all[i].shadowRoot) collectVideos(all[i].shadowRoot, out, depth + 1);
+    }
+  }
+
+  // 收视频列表要扫一遍整棵 DOM（含影子树），按住空格连发 keydown 时别每次都扫 —— 缓存半秒
+  let vidCache = null;
+  let vidCacheAt = 0;
+
+  function videoList() {
+    const now = Date.now();
+    if (vidCache && now - vidCacheAt < 500) return vidCache;
+    const list = [];
+    collectVideos(document, list, 0);
+    vidCache = list;
+    vidCacheAt = now;
+    return list;
+  }
+
+  function dominantVideo() {
+    const list = videoList();
+    if (!list.length) return null;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let best = null;
+    let bestArea = 0;
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      // 静音 + 循环 + 没有控件 = 首屏装饰背景视频，不该抢空格
+      if (v.muted && v.loop && !v.controls) continue;
+      const r = v.getBoundingClientRect();
+      const w = Math.min(r.right, vw) - Math.max(r.left, 0);
+      const h = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      if (w < 240 || h < 135) continue; // 视口外 / 缩略预览 / 广告条
+      const area = w * h;
+      if (area < vw * vh * 0.2) continue; // 占屏不到两成的当配图
+      if (area > bestArea) {
+        best = v;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
+  function toggleMedia(v) {
+    try {
+      if (v.paused || v.ended) {
+        const p = v.play();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } else {
+        v.pause();
+      }
+    } catch (err) {
+      /* 部分播放器禁止程序化播放，忽略 */
+    }
+  }
+
+  // 空格改判：命中视频就把「空格 = 滚一屏」的默认行为掐掉，交还给播放器语义。
+  // 不 stopPropagation —— 站点自己的空格快捷键（YouTube / B 站都是全局绑定）照常收到事件；
+  // 会不会重复切换靠「切完再看状态」兜底：一轮事件走完状态没变才由我们补一次。
+  // 直接在事件里切会和站点撞成两次切换、互相抵消，看起来就是「空格没反应」。
+  function handleSpaceForMedia(e) {
+    if (!cfg.videoSpace || !cfg.enabled) return false;
+    if (e.shiftKey) return false; // Shift+空格 保留「上翻一屏」
+    const m = mediaInPath(e) || dominantVideo();
+    if (!m) return false;
+    e.preventDefault();
+    if (e.repeat) return true; // 长按不连点
+    const before = m.paused;
+    setTimeout(() => {
+      if (m.paused === before) toggleMedia(m);
+    }, 0);
+    return true;
+  }
+
   function onKey(e) {
     if (!cfg.keys || !cfg.enabled || e.defaultPrevented) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -571,6 +681,7 @@ site:
         break;
       case ' ':
       case 'Spacebar':
+        if (handleSpaceForMedia(e)) return;
         y = readY(el) + (e.shiftKey ? -1 : 1) * vh * 0.85 * k;
         break;
       case 'ArrowDown':
@@ -1259,6 +1370,7 @@ site:
       items: [
         { path: 'enabled', label: '平滑滚动总开关', hint: '关掉后完全交还原生滚动', type: 'bool' },
         { path: 'keys', label: '接管键盘翻页键', hint: '空格 / PgUp / PgDn / 方向键 / Home / End', type: 'bool' },
+        { path: 'videoSpace', label: '看视频时空格归播放器', hint: '有在看的视频时，空格 = 暂停 / 播放', type: 'bool' },
         { path: 'anchors', label: '锚点跳转动画', hint: '点页内 #锚点 时也走展卷', type: 'bool' },
         { path: 'smoothTime', label: '顺滑度', hint: '阻尼时间越大越绵长', type: 'select', values: [0.2, 0.34, 0.52, 0.8], fmt: (v) => v + 's' },
         { path: 'distScale', label: '滚动距离倍率', hint: '', type: 'select', values: [0.6, 1, 1.4, 2], fmt: (v) => v + '×' },
@@ -1753,6 +1865,20 @@ site:
     toTop: () => scrollToY(0),
     toEnd: () => scrollToY(maxOf(curRoot())),
     flash: flash,
+    media: () => {
+      const v = dominantVideo();
+      if (!v) return null;
+      const r = v.getBoundingClientRect();
+      return {
+        paused: v.paused,
+        muted: v.muted,
+        loop: v.loop,
+        controls: v.controls,
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        inShadow: !document.contains(v),
+      };
+    },
     state: () => {
       const el = curRoot();
       return {

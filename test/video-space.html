@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>视频里的空格 · 回归测试</title>
+<style>
+  :root { --ink: #2b241b; --paper: #f4ead6; --gold: #a8842f; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink); background: var(--paper);
+    font: 15px/1.8 "Noto Serif CJK SC", "Songti SC", SimSun, Georgia, serif;
+  }
+  .paper { max-width: 860px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: .1em; }
+  h2 { font-size: 16px; margin: 40px 0 10px; padding-left: 10px; border-left: 4px solid var(--gold); }
+  p { margin: 0 0 12px; }
+  code { font: 13px ui-monospace, Consolas, monospace; background: #eadfc6; padding: 1px 5px; border-radius: 4px; }
+  .hint { font-size: 13px; color: #6b5c45; margin: 4px 0 0; }
+  video { display: block; background: #1b1610; border-radius: 6px; }
+  .player { position: relative; }
+  .case { margin: 46vh 0; } /* 用例之间留足空档：判定「谁占着视口」时不该互相干扰 */
+  .filler p { text-indent: 2em; margin-bottom: 14px; }
+  #readout {
+    position: fixed; left: 12px; bottom: 12px; z-index: 9999;
+    background: rgba(28, 22, 14, .9); color: #f4ead6; border-radius: 8px;
+    padding: 8px 12px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="paper">
+  <h1>视频里的空格 · 回归测试</h1>
+  <p class="hint">判定：<strong>空格属于播放器</strong>（暂停 / 播放），页面不动；只有「小尺寸视频 / 装饰用静音循环视频 / 视频已滚出视口 / Shift+空格」这几类才继续翻页。
+  测试页把 <code>&lt;script src="../scripts/scroll-unroll.user.js"&gt;</code> 直接引进页面，不需要装脚本管理器。</p>
+
+  <section class="case">
+  <h2>1 · 主播放器（占屏够大）</h2>
+  <div class="player"><video id="p-main" playsinline></video></div>
+  <p class="hint">按空格应「暂停」，再按「播放」，全程 <code>scrollY</code> 不变。</p>
+  </section>
+
+  <section class="case">
+  <h2>2 · 小尺寸预览视频（低于阈值）</h2>
+  <div class="player"><video id="p-small" width="200" height="112" playsinline></video></div>
+  <p class="hint">只有 200×112，属于附属配图：空格应<strong>翻页</strong>，视频状态不变。</p>
+  </section>
+
+  <section class="case">
+  <h2>3 · 首屏装饰视频（muted + loop + 无控件）</h2>
+  <div class="player"><video id="p-hero" playsinline muted loop></video></div>
+  <p class="hint">静音循环无控件的背景视频不算「在看」：空格应<strong>翻页</strong>。</p>
+  </section>
+
+  <section class="case">
+  <h2>4 · 原生控件视频（焦点在 video 上）</h2>
+  <div class="player"><video id="p-focus" width="360" height="202" controls playsinline></video></div>
+  <p class="hint">点一下播放器让焦点落在 <code>&lt;video&gt;</code> 上再按空格：应切换播放状态、页面不动（尺寸小也不影响，因为事件路径里有 video）。</p>
+  </section>
+
+  <section class="case">
+  <h2>5 · Shadow DOM 里的视频</h2>
+  <shadow-player id="p-shadow"></shadow-player>
+  <p class="hint">视频藏在影子树里：空格仍应暂停它（脚本连 shadow root 一起扫）。</p>
+  </section>
+
+  <section class="case">
+  <h2>6 · 站点自己也把空格绑成播放暂停</h2>
+  <div class="player"><video id="p-global" playsinline></video></div>
+  <p class="hint">模拟 YouTube / B 站：页面在冒泡阶段挂了 <code>keydown</code>，按空格自己切一次播放状态（不检查 <code>defaultPrevented</code>）。
+  脚本必须只让<strong>净结果切一次</strong> —— 它切了就不再补，否则两次切换互相抵消，表现为「空格没反应」。</p>
+  </section>
+
+  <section class="case">
+  <h2>7 · 输入框（回归）</h2>
+  <input id="t-input" type="text" placeholder="这里按空格应该打出一个空格，页面不动"
+         style="width:100%;font:14px/1.7 ui-monospace,Consolas,monospace;padding:8px 10px;border:1px solid #c3b391;border-radius:6px;background:#fffdf7">
+  </section>
+
+  <section class="case">
+  <h2>8 · 纯文字段落（没有视频在视口里）</h2>
+  <p class="hint">把上面所有视频滚出视口后按空格：应照常展卷翻页。</p>
+  </section>
+
+  <h2>撑高用的正文</h2>
+  <div class="filler" id="filler"></div>
+</div>
+
+<div id="readout">就绪</div>
+
+<script>
+  // ---- 撑高页面，保证有可滚动空间 ----
+  var filler = document.getElementById('filler');
+  var buf = [];
+  for (var i = 1; i <= 80; i++) {
+    buf.push('<p>第 ' + i + ' 段。卷轴展卷 / 视频空格用例的填充正文，只为把页面撑高，好判断按键是否触发了整页滚动。</p>');
+  }
+  filler.innerHTML = buf.join('');
+
+  // ---- 用 canvas 的 captureStream 造一段真视频流：不需要外部媒体文件，可播放 / 可暂停 ----
+  function attachStream(v) {
+    var c = document.createElement('canvas');
+    c.width = 640; c.height = 360;
+    var g = c.getContext('2d');
+    var t = 0;
+    setInterval(function () {
+      t += 1;
+      g.fillStyle = '#1b1610'; g.fillRect(0, 0, 640, 360);
+      g.fillStyle = '#d8b45a';
+      g.beginPath();
+      g.arc(320 + Math.sin(t / 20) * 120, 180 + Math.cos(t / 26) * 70, 48, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#f4ead6'; g.font = '20px monospace';
+      g.fillText('t=' + t, 24, 40);
+    }, 40);
+    v.srcObject = c.captureStream(25);
+  }
+
+  var mainVideo = document.getElementById('p-main');
+  mainVideo.style.width = '100%';
+  mainVideo.style.aspectRatio = '16 / 9';
+  var globalVideo = document.getElementById('p-global');
+  globalVideo.style.width = '100%';
+  globalVideo.style.aspectRatio = '16 / 9';
+  attachStream(mainVideo);
+  attachStream(globalVideo);
+  attachStream(document.getElementById('p-small'));
+  attachStream(document.getElementById('p-hero'));
+  attachStream(document.getElementById('p-focus'));
+
+  if (!customElements.get('shadow-player')) {
+    customElements.define('shadow-player', class extends HTMLElement {
+      connectedCallback() {
+        if (this.shadowRoot) return;
+        var r = this.attachShadow({ mode: 'open' });
+        r.innerHTML = '<style>video{display:block;width:100%;aspect-ratio:16/9;background:#1b1610;border-radius:6px}</style>'
+          + '<div class="player"><video playsinline></video></div>';
+        var v = r.querySelector('video');
+        attachStream(v);
+        window.__shadowVideo = v;
+      }
+    });
+  }
+
+  // ---- 起播（静音起播，避开自动播放策略；播起来之后才谈得上「按空格暂停」）----
+  // 模拟站点自己的空格快捷键：冒泡阶段、且故意不看 defaultPrevented（YouTube / B 站就是这样）
+  window.addEventListener('keydown', function (e) {
+    if (e.key !== ' ' || e.shiftKey) return;
+    var v = document.getElementById('p-global');
+    if (!v) return;
+    var r = v.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight) return; // 只在它出现在视口里时管
+    if (v.paused) { var p = v.play(); if (p && p.catch) p.catch(function () {}); } else { v.pause(); }
+  }, false);
+
+  window.__startAll = function () {
+    var list = [mainVideo, document.getElementById('p-small'), document.getElementById('p-hero'), document.getElementById('p-focus'), globalVideo, window.__shadowVideo];
+    list.forEach(function (v) {
+      if (!v) return;
+      v.muted = true;
+      var p = v.play();
+      if (p && p.catch) p.catch(function () {});
+    });
+    return 'started';
+  };
+
+  // ---- 读状态 ----
+  window.__vstate = function (id) {
+    var v = id === 'p-shadow' ? window.__shadowVideo : document.getElementById(id);
+    if (!v) return null;
+    var r = v.getBoundingClientRect();
+    return {
+      id: id,
+      paused: v.paused,
+      muted: v.muted,
+      loop: v.loop,
+      controls: v.controls,
+      inView: r.bottom > 0 && r.top < window.innerHeight,
+      w: Math.round(Math.min(r.right, window.innerWidth) - Math.max(r.left, 0)),
+      h: Math.round(Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0)),
+      scrollY: Math.round(window.scrollY)
+    };
+  };
+  window.__all = function () {
+    return ['p-main', 'p-small', 'p-hero', 'p-focus', 'p-global', 'p-shadow'].map(window.__vstate);
+  };
+
+  // ---- 定位 / 居中（脚本接管了 window.scrollTo，这里直写 scrollTop）----
+  window.__pos = function (y) {
+    var se = document.scrollingElement || document.documentElement;
+    se.scrollTop = y;
+    return Math.round(window.scrollY);
+  };
+  window.__center = function (sel, id) {
+    var v = id ? (id === 'p-shadow' ? window.__shadowVideo : document.getElementById(id)) : document.querySelector(sel);
+    if (!v) return 'no-el';
+    var se = document.scrollingElement || document.documentElement;
+    var r = v.getBoundingClientRect();
+    se.scrollTop = Math.max(0, Math.round(window.scrollY + r.top - (window.innerHeight - r.height) / 2));
+    return Math.round(window.scrollY);
+  };
+  window.__idle = function () {
+    var s = window.__scrollUnroll && window.__scrollUnroll.state ? window.__scrollUnroll.state() : null;
+    return { running: s ? s.running : false, y: Math.round(window.scrollY) };
+  };
+
+  // ---- 键盘探针：挂在冒泡阶段，才能读到脚本处理后的 defaultPrevented ----
+  window.__keylog = [];
+  window.addEventListener('keydown', function (e) {
+    window.__keylog.push({
+      key: e.key,
+      target: e.target && e.target.tagName,
+      prevented: e.defaultPrevented,
+      samples: window.__samples ? window.__samples.length : 0
+    });
+  }, false);
+
+  // ---- 采样滚动过程 ----
+  window.__samples = [];
+  window.__watchScroll = function (ms) {
+    window.__samples = [];
+    var t0 = performance.now();
+    var tick = function () {
+      var t = performance.now() - t0;
+      window.__samples.push([Math.round(t), Math.round(window.scrollY)]);
+      if (t < ms) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return 'watching';
+  };
+
+  var s = document.createElement('script');
+  s.src = '../scripts/scroll-unroll.user.js';
+  s.onerror = function () { document.getElementById('readout').textContent = '脚本加载失败'; };
+  document.head.appendChild(s);
+  document.getElementById('readout').textContent = '已载入脚本\n' + location.pathname;
+</script>
+</body>
+</html>
